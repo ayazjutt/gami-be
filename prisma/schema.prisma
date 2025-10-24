@@ -1,0 +1,203 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Status {
+  ACTIVE
+  HIDDEN
+  RETIRED
+}
+
+enum PoolType {
+  PT_IBT
+  YT_IBT
+}
+
+model Network {
+  id              Int     @id @default(autoincrement())
+  name            String  @unique // "eth" | "base" | "avax" | "hyperevm"
+  explorerBaseUrl String?
+  isActive        Boolean @default(true)
+  assets          Asset[]
+}
+
+model Asset {
+  id              BigInt     @id @default(autoincrement())
+  networkId       Int
+  network         Network    @relation(fields: [networkId], references: [id])
+  ibtAddress      String
+  symbolDisplay   String
+  symbolCanonical String?
+  status          Status     @default(ACTIVE)
+  discoveredAt    DateTime?  @db.Timestamptz
+  updatedAt       DateTime?  @db.Timestamptz
+  maturities      Maturity[]
+
+  @@unique([networkId, ibtAddress])
+}
+
+model Maturity {
+  id              BigInt           @id @default(autoincrement())
+  assetId         BigInt
+  asset           Asset            @relation(fields: [assetId], references: [id])
+  maturityDate    DateTime         @db.Date
+  tenorMonths     Int?
+  status          Status           @default(ACTIVE)
+  createdAt       DateTime         @default(now()) @db.Timestamptz
+  pools           Pool[]
+  ptSnapshots     PtSnapshot[]
+  ytSnapshots     YtSnapshot[]
+  portfolioAssets PortfolioAsset[]
+
+  // 👇 Add this line
+  portfolioAllocations PortfolioAllocation[]
+
+  @@unique([assetId, maturityDate])
+}
+
+model Pool {
+  id          BigInt       @id @default(autoincrement())
+  maturityId  BigInt
+  maturity    Maturity     @relation(fields: [maturityId], references: [id])
+  poolType    PoolType
+  poolAddress String
+  feeRateBps  Int?
+  status      Status       @default(ACTIVE)
+  createdAt   DateTime     @default(now()) @db.Timestamptz
+  lpSnapshots LpSnapshot[]
+
+  @@unique([maturityId, poolType])
+}
+
+model PtSnapshot {
+  id              BigInt   @id @default(autoincrement())
+  maturityId      BigInt
+  maturity        Maturity @relation(fields: [maturityId], references: [id])
+  ts              DateTime @db.Timestamptz
+  ptMarket        Decimal? @db.Decimal(38, 18)
+  ptFair          Decimal? @db.Decimal(38, 18)
+  ptMispricingPct Decimal? @db.Decimal(9, 6)
+  ptImpliedApy    Decimal? @db.Decimal(9, 6)
+  bidAskSpread    Decimal? @db.Decimal(9, 6)
+  vol24h          Decimal? @db.Decimal(24, 6)
+  ingestSource    String?
+  ingestVersion   String?
+  raw             Json?
+
+  @@unique([maturityId, ts])
+  @@index([ts])
+}
+
+model YtSnapshot {
+  id                 BigInt   @id @default(autoincrement())
+  maturityId         BigInt
+  maturity           Maturity @relation(fields: [maturityId], references: [id])
+  ts                 DateTime @db.Timestamptz
+  ytPrice            Decimal? @db.Decimal(38, 18)
+  ytImpliedApy       Decimal? @db.Decimal(9, 6)
+  ytAccumulatedYield Decimal? @db.Decimal(38, 18)
+  dailyYieldEst      Decimal? @db.Decimal(38, 18)
+  harvestSignal      Int? // 0 ok, 1 harvest
+  ingestSource       String?
+  ingestVersion      String?
+  raw                Json?
+
+  @@unique([maturityId, ts])
+  @@index([ts])
+}
+
+model LpSnapshot {
+  id            BigInt   @id @default(autoincrement())
+  poolId        BigInt
+  pool          Pool     @relation(fields: [poolId], references: [id])
+  ts            DateTime @db.Timestamptz
+  tvl           Decimal? @db.Decimal(24, 6)
+  vol24h        Decimal? @db.Decimal(24, 6)
+  feeApr        Decimal? @db.Decimal(9, 6)
+  utilization   Decimal? @db.Decimal(9, 6)
+  ingestSource  String?
+  ingestVersion String?
+  raw           Json?
+
+  @@unique([poolId, ts])
+  @@index([ts])
+}
+
+model InputMetric {
+  id        BigInt   @id @default(autoincrement())
+  ts        DateTime @db.Timestamptz
+  metricKey String
+  value     Decimal? @db.Decimal(24, 8)
+  prevValue Decimal? @db.Decimal(24, 8)
+  changePct Decimal? @db.Decimal(9, 6)
+  threshold Decimal? @db.Decimal(24, 8)
+  status    Int? // 0 ok, 1 warn, 2 alert
+  source    String?
+  notes     String?
+
+  @@unique([metricKey, ts])
+  @@index([ts])
+}
+
+model PortfolioAsset {
+  id         BigInt    @id @default(autoincrement())
+  maturityId BigInt
+  maturity   Maturity  @relation(fields: [maturityId], references: [id])
+  status     Status    @default(ACTIVE)
+  addedAt    DateTime  @default(now()) @db.Timestamptz
+  removedAt  DateTime? @db.Timestamptz
+}
+
+model PortfolioAllocation {
+  id                 BigInt   @id @default(autoincrement())
+  maturityId         BigInt
+  maturity           Maturity @relation(fields: [maturityId], references: [id])
+  ts                 DateTime @db.Timestamptz
+  targetWeightPct    Decimal? @db.Decimal(9, 6)
+  effectiveWeightPct Decimal? @db.Decimal(9, 6)
+  policyTag          String?
+
+  @@unique([maturityId, ts])
+  @@index([ts])
+}
+
+model PortfolioIntervalMetric {
+  id          BigInt   @id @default(autoincrement())
+  ts          DateTime @unique @db.Timestamptz
+  aumTotal    Decimal? @db.Decimal(24, 6)
+  netApy      Decimal? @db.Decimal(9, 6)
+  alpha       Decimal? @db.Decimal(9, 6)
+  sharpe      Decimal? @db.Decimal(9, 6)
+  alertsTotal Int?
+  byNetwork   Json?
+  byTenor     Json?
+}
+
+model PortfolioDailyMetric {
+  id          BigInt   @id @default(autoincrement())
+  date        DateTime @unique @db.Date
+  aumTotal    Decimal? @db.Decimal(24, 6)
+  netApy      Decimal? @db.Decimal(9, 6)
+  alpha       Decimal? @db.Decimal(9, 6)
+  sharpe      Decimal? @db.Decimal(9, 6)
+  alertsTotal Int?
+  notes       String?
+}
+
+model Alert {
+  id         BigInt   @id @default(autoincrement())
+  ts         DateTime @db.Timestamptz
+  entityType Int // 0=portfolio,1=maturity,2=pool
+  entityId   BigInt
+  severity   Int // 0 info,1 warn,2 alert
+  alertType  String
+  message    String?
+  data       Json?
+
+  @@index([ts])
+}
