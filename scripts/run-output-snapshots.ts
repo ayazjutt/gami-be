@@ -1,24 +1,32 @@
+import 'dotenv/config';
 import 'reflect-metadata';
 import { Logger } from '@nestjs/common';
-import { PrismaService } from '../src/prisma/prisma.service';
+import { Module } from '@nestjs/common';
+import { NestFactory } from '@nestjs/core';
 import { OutputMetricsService } from '../src/outputs/output-metrics.service';
+import { OutputsModule } from '../src/outputs/outputs.module';
 
-async function main() {
-  const logger = new Logger('OutputSnapshotsRunner');
-  const prisma = new PrismaService();
-  await prisma.$connect();
+@Module({
+  imports: [OutputsModule],
+})
+class OutputSnapshotsScriptModule {}
 
-  const service = new OutputMetricsService(prisma);
+async function bootstrap() {
+  const app = await NestFactory.createApplicationContext(OutputSnapshotsScriptModule, {
+    logger: ['log', 'error', 'warn'],
+  });
 
   try {
+    const service = app.get(OutputMetricsService);
     await service.createOutputSnapshots();
+    const logger = new Logger('OutputSnapshotsRunner');
     logger.log('MetaVault output snapshots computation completed.');
   } finally {
-    await prisma.$disconnect();
+    await app.close();
   }
 }
 
-main().catch((error) => {
+bootstrap().catch((error) => {
   // eslint-disable-next-line no-console
   console.error('Failed to compute output snapshots', error);
   process.exitCode = 1;
