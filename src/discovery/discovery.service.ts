@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
-import { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { firstValueFrom } from 'rxjs';
 
@@ -156,8 +156,9 @@ export class DiscoveryService {
     // 3) Insert a snapshot for each maturity item (ALWAYS create)
     for (const item of data) {
       const maturity = await this.createSnapshot(network.id, item); // now RETURNS the created snapshot
-      
+
       await this.createInputSnapshot(maturity.id, item);            // uses the returned id
+      await this.createOutputSnapshot(maturity.id, item);
     }
   }
 
@@ -429,6 +430,290 @@ export class DiscoveryService {
 
   await this.prisma.inputSnapshot.createMany({ data: rows, skipDuplicates: false });
 }
+
+  private async createOutputSnapshot(
+    maturitySnapshotId: number,
+    portfolioItem: PortfolioItem,
+  ): Promise<void> {
+    const maturity = await this.prisma.maturitySnapshot.findUnique({
+      where: { id: maturitySnapshotId },
+      include: { asset: { select: { id: true } } },
+    });
+    if (!maturity) {
+      throw new Error(`MaturitySnapshot ${maturitySnapshotId} not found`);
+    }
+    const assetId = maturity.asset.id;
+
+    const metrics = await this.prisma.outputMetric.findMany({
+      select: { id: true, title: true },
+    });
+    const metricId = (title: string) => {
+      const id = metrics.find((m) => m.title === title)?.id;
+      if (!id) throw new Error(`OutputMetric not seeded: "${title}"`);
+      return id;
+    };
+
+    const prevOf = async (title: string) => {
+      const id = metricId(title);
+      const prev = await this.prisma.outputSnapshot.findFirst({
+        where: { outputMetricId: id, maturitySnapshot: { assetId } },
+        orderBy: { createdAt: 'desc' },
+        select: { currentValue: true },
+      });
+      return prev?.currentValue != null ? Number(prev.currentValue as any) : null;
+    };
+
+    const settingsRows = await this.prisma.setting.findMany({
+      select: { key: true, numValue: true },
+    });
+    const S = (key: string): number | null => {
+      const match = settingsRows.find((row) => row.key === key)?.numValue;
+      return match != null ? Number(match) : null;
+    };
+
+    const managementFee = S('MANAGEMENT_FEE_RATE');
+    const performanceFee = S('PERFORMANCE_FEE_RATE');
+    const benchmarkApy = S('BENCHMARK_APY');
+    const targetAlpha = S('TARGET_ALPHA');
+    const harvestThreshold = S('HARVEST_THRESHOLD');
+    const gasThreshold = S('GAS_ALERT_THRESHOLD');
+    const rebalanceThreshold = S('REBALANCE_THRESHOLD');
+
+    const pool = (portfolioItem.pools ?? [])[0];
+
+    const impliedApyPct =
+      num(pool?.impliedApy) ??
+      (num(portfolioItem?.ibt?.apr?.total) != null
+        ? Number(portfolioItem!.ibt!.apr!.total) * 100
+        : null);
+    const grossApyDecimal = impliedApyPct != null ? impliedApyPct / 100 : null;
+
+    const netApyDecimal = grossApyDecimal != null
+      ? (() => {
+          let net = grossApyDecimal;
+          if (managementFee != null) net -= managementFee;
+          if (performanceFee != null && benchmarkApy != null) {
+            const perfBase = Math.max(grossApyDecimal - benchmarkApy, 0);
+            net -= perfBase * performanceFee;
+          }
+          return net;
+        })()
+      : null;
+    const netApyPercent = netApyDecimal != null ? netApyDecimal * 100 : null;
+
+    const alphaDecimal =
+      netApyDecimal != null && benchmarkApy != null ? netApyDecimal - benchmarkApy : null;
+    const alphaPercent = alphaDecimal != null ? alphaDecimal * 100 : null;
+    const sharpeRatio =
+      alphaDecimal != null && rebalanceThreshold != null && rebalanceThreshold > 0
+        ? alphaDecimal / rebalanceThreshold
+        : null;
+
+    const ptPriceUsd = num(pool?.ptPrice?.usd);
+    const fairValueUsd = num(portfolioItem?.maturityValue?.usd);
+    const maxDrawdownPct =
+      ptPriceUsd != null && fairValueUsd != null && fairValueUsd !== 0
+        ? ((fairValueUsd - ptPriceUsd) / fairValueUsd) * 100
+        : null;
+
+    const yieldEfficiencyPct =
+      grossApyDecimal != null && grossApyDecimal > 0 && netApyDecimal != null
+        ? (netApyDecimal / grossApyDecimal) * 100
+        : null;
+
+    const tvlUsd = num(portfolioItem?.tvl?.usd);
+    const annualYield = tvlUsd != null && netApyDecimal != null ? tvlUsd * netApyDecimal : null;
+    const harvestsPerYear =
+      annualYield != null && harvestThreshold != null && harvestThreshold > 0
+        ? annualYield / harvestThreshold
+        : null;
+
+    const gasUsedGwei = scaled(pool?.feeRate, 6);
+    const gasEfficiencyPct =
+      gasThreshold != null && gasThreshold > 0 && gasUsedGwei != null
+        ? ((gasThreshold - gasUsedGwei) / gasThreshold) * 100
+        : null;
+
+    const spotPrice = scaled(pool?.spotPrice, 18);
+    const slippagePct = spotPrice != null ? Math.abs(spotPrice - 1) * 100 : null;
+
+    const benchmarkPercent = benchmarkApy != null ? benchmarkApy * 100 : null;
+    const targetAlphaPercent = targetAlpha != null ? targetAlpha * 100 : null;
+    const netTarget =
+      benchmarkPercent != null && targetAlphaPercent != null
+        ? benchmarkPercent + targetAlphaPercent
+        : null;
+    const drawdownThreshold = rebalanceThreshold != null ? rebalanceThreshold * 100 : 10;
+    const yieldEfficiencyTarget = managementFee != null ? (1 - managementFee) * 100 : 90;
+    const harvestTarget = 12;
+    const gasTarget = gasThreshold != null ? gasThreshold * 0.8 : null;
+    const slippageTarget = 1;
+
+    const rows: Prisma.OutputSnapshotCreateManyInput[] = [];
+
+    const metaPrev = await prevOf('MetaVault Net APY');
+    rows.push(
+      buildOutputRow({
+        maturitySnapshotId,
+        outputMetricId: metricId('MetaVault Net APY'),
+        currentValue: netApyPercent,
+        target: netTarget,
+        benchmark: benchmarkPercent,
+        vsTarget: diff(netApyPercent, netTarget),
+        vsBenchmark: diff(netApyPercent, benchmarkPercent),
+        status:
+          netApyPercent != null && netTarget != null
+            ? netApyPercent >= netTarget
+              ? 'On Track'
+              : 'Lagging'
+            : null,
+        trend: trend(metaPrev, netApyPercent),
+      }),
+    );
+
+    const alphaPrev = await prevOf('Alpha Generation');
+    rows.push(
+      buildOutputRow({
+        maturitySnapshotId,
+        outputMetricId: metricId('Alpha Generation'),
+        currentValue: alphaPercent,
+        target: targetAlphaPercent,
+        benchmark: 0,
+        vsTarget: diff(alphaPercent, targetAlphaPercent),
+        vsBenchmark: diff(alphaPercent, 0),
+        status:
+          alphaPercent != null && targetAlphaPercent != null
+            ? alphaPercent >= targetAlphaPercent
+              ? 'On Track'
+              : 'Lagging'
+            : null,
+        trend: trend(alphaPrev, alphaPercent),
+      }),
+    );
+
+    const sharpePrev = await prevOf('Sharpe Ratio');
+    rows.push(
+      buildOutputRow({
+        maturitySnapshotId,
+        outputMetricId: metricId('Sharpe Ratio'),
+        currentValue: sharpeRatio,
+        target: 1,
+        benchmark: 0,
+        vsTarget: diff(sharpeRatio, 1),
+        vsBenchmark: diff(sharpeRatio, 0),
+        status: sharpeRatio != null ? (sharpeRatio >= 1 ? 'On Track' : 'Lagging') : null,
+        trend: trend(sharpePrev, sharpeRatio),
+      }),
+    );
+
+    const drawdownPrev = await prevOf('Maximum Drawdown');
+    rows.push(
+      buildOutputRow({
+        maturitySnapshotId,
+        outputMetricId: metricId('Maximum Drawdown'),
+        currentValue: maxDrawdownPct,
+        target: 0,
+        benchmark: drawdownThreshold,
+        vsTarget: diff(maxDrawdownPct, 0),
+        vsBenchmark: diff(maxDrawdownPct, drawdownThreshold),
+        status:
+          maxDrawdownPct != null
+            ? maxDrawdownPct <= drawdownThreshold
+              ? 'On Track'
+              : 'Lagging'
+            : null,
+        trend: trend(drawdownPrev, maxDrawdownPct),
+      }),
+    );
+
+    const efficiencyPrev = await prevOf('Yield Efficiency');
+    rows.push(
+      buildOutputRow({
+        maturitySnapshotId,
+        outputMetricId: metricId('Yield Efficiency'),
+        currentValue: yieldEfficiencyPct,
+        target: yieldEfficiencyTarget,
+        benchmark: 100,
+        vsTarget: diff(yieldEfficiencyPct, yieldEfficiencyTarget),
+        vsBenchmark: diff(yieldEfficiencyPct, 100),
+        status:
+          yieldEfficiencyPct != null && yieldEfficiencyTarget != null
+            ? yieldEfficiencyPct >= yieldEfficiencyTarget
+              ? 'On Track'
+              : 'Lagging'
+            : null,
+        trend: trend(efficiencyPrev, yieldEfficiencyPct),
+      }),
+    );
+
+    const harvestPrev = await prevOf('Harvest Frequency');
+    rows.push(
+      buildOutputRow({
+        maturitySnapshotId,
+        outputMetricId: metricId('Harvest Frequency'),
+        currentValue: harvestsPerYear,
+        target: harvestTarget,
+        benchmark: null,
+        vsTarget: diff(harvestsPerYear, harvestTarget),
+        vsBenchmark: null,
+        status:
+          harvestsPerYear != null
+            ? harvestsPerYear >= harvestTarget
+              ? 'On Track'
+              : 'Lagging'
+            : null,
+        trend: trend(harvestPrev, harvestsPerYear),
+      }),
+    );
+
+    const gasPrev = await prevOf('Gas Efficiency');
+    rows.push(
+      buildOutputRow({
+        maturitySnapshotId,
+        outputMetricId: metricId('Gas Efficiency'),
+        currentValue: gasEfficiencyPct,
+        target:
+          gasTarget != null && gasThreshold != null
+            ? ((gasThreshold - gasTarget) / gasThreshold) * 100
+            : null,
+        benchmark: 0,
+        vsTarget:
+          gasEfficiencyPct != null && gasTarget != null && gasThreshold != null
+            ? gasEfficiencyPct - ((gasThreshold - gasTarget) / gasThreshold) * 100
+            : null,
+        vsBenchmark: diff(gasEfficiencyPct, 0),
+        status:
+          gasUsedGwei != null && gasThreshold != null
+            ? gasUsedGwei <= gasThreshold
+              ? 'On Track'
+              : 'Lagging'
+            : null,
+        trend: trend(gasPrev, gasEfficiencyPct),
+      }),
+    );
+
+    const slippagePrev = await prevOf('Slippage Control');
+    rows.push(
+      buildOutputRow({
+        maturitySnapshotId,
+        outputMetricId: metricId('Slippage Control'),
+        currentValue: slippagePct,
+        target: slippageTarget,
+        benchmark: 0,
+        vsTarget: diff(slippagePct, slippageTarget),
+        vsBenchmark: diff(slippagePct, 0),
+        status:
+          slippagePct != null
+            ? slippagePct <= slippageTarget
+              ? 'On Track'
+              : 'Lagging'
+            : null,
+        trend: trend(slippagePrev, slippagePct),
+      }),
+    );
+
+    await this.prisma.outputSnapshot.createMany({ data: rows, skipDuplicates: false });
+  }
 }
 
 /** ---------- helpers ---------- */
@@ -510,4 +795,46 @@ function pegAlert(usd: number | null, thr: number | null): boolean {
 function overThreshold(valuePct: number | null, thrPct: number | null): boolean {
   if (valuePct == null || thrPct == null) return false;
   return valuePct > thrPct;
+}
+function diff(cur: number | null | undefined, ref: number | null | undefined): number | null {
+  if (cur == null || ref == null) return null;
+  return cur - ref;
+}
+function trend(prev: number | null, cur: number | null): string | null {
+  if (prev == null || cur == null) return null;
+  if (Math.abs(cur - prev) < 1e-6) return 'Flat';
+  return cur > prev ? 'Up' : 'Down';
+}
+function buildOutputRow(opts: {
+  maturitySnapshotId: number;
+  outputMetricId: number;
+  currentValue: number | null;
+  target: number | null;
+  benchmark: number | null;
+  vsTarget: number | null;
+  vsBenchmark: number | null;
+  status: string | null;
+  trend: string | null;
+}): Prisma.OutputSnapshotCreateManyInput {
+  return {
+    maturitySnapshotId: opts.maturitySnapshotId,
+    outputMetricId: opts.outputMetricId,
+    currentValue: toDec(opts.currentValue),
+    target: toDec(opts.target),
+    benchmark: toDec(opts.benchmark),
+    vsTarget: toDec(opts.vsTarget),
+    vsBenchmark: toDec(opts.vsBenchmark),
+    status: opts.status ?? null,
+    trend: opts.trend ?? null,
+  };
+}
+function scaled(value: BigNumberish | null | undefined, decimals: number): number | null {
+  if (value == null) return null;
+  try {
+    const dec = new Prisma.Decimal(value as any);
+    const divisor = new Prisma.Decimal(10).pow(decimals);
+    return Number(dec.div(divisor));
+  } catch {
+    return null;
+  }
 }
