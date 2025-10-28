@@ -33,6 +33,23 @@ interface TradeLog extends TradeExecutionLog {
   timestamp: Date;
 }
 
+export interface OutputSnapshotSummary {
+  metric: string;
+  currentValue: number | null;
+  target: number | null;
+  benchmark: number | null;
+  vsTarget: number | null;
+  vsBenchmark: number | null;
+  status: string | null;
+  trend: string | null;
+  scope: {
+    assetId: number | null;
+    assetSymbol: string | null;
+    tenure: string;
+  };
+  timestamp: string;
+}
+
 interface MetricComputation {
   title: string;
   value: number | null;
@@ -202,6 +219,46 @@ export class OutputMetricsService {
     this.logger.log(`Created ${payload.length} MetaVault output snapshots.`);
   }
 
+  async getAllOutputSnapshots(): Promise<OutputSnapshotSummary[]> {
+    const rows = await this.prisma.outputSnapshot.findMany({
+      include: {
+        outputMetric: true,
+        maturitySnapshot: {
+          include: {
+            asset: true,
+            tenure: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+
+    return rows.map((row) => {
+      const maturitySnapshot = row.maturitySnapshot;
+      const asset = maturitySnapshot?.asset ?? null;
+      const tenure = maturitySnapshot?.tenure ?? null;
+
+      return {
+        metric: row.outputMetric?.title ?? 'Unknown Metric',
+        currentValue: this.fromDecimal(row.currentValue),
+        target: this.fromDecimal(row.target),
+        benchmark: this.fromDecimal(row.benchmark),
+        vsTarget: this.fromDecimal(row.vsTarget),
+        vsBenchmark: this.fromDecimal(row.vsBenchmark),
+        status: row.status ?? null,
+        trend: this.formatTrend(row.trend),
+        scope: {
+          assetId: maturitySnapshot?.assetId ?? null,
+          assetSymbol: asset?.symbol ?? null,
+          tenure: tenure?.title ?? 'ALL',
+        },
+        timestamp: row.createdAt.toISOString(),
+      } satisfies OutputSnapshotSummary;
+    });
+  }
+
   private async resolveMetaVaultSnapshotId(settings: OutputSettings): Promise<number | null> {
     if (settings.metaVaultMaturitySnapshotId) {
       return settings.metaVaultMaturitySnapshotId;
@@ -354,5 +411,28 @@ export class OutputMetricsService {
     }
 
     return new Prisma.Decimal(value);
+  }
+
+  private fromDecimal(value: Prisma.Decimal | null): number | null {
+    if (value == null) {
+      return null;
+    }
+
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+
+  private formatTrend(trend: string | null): string | null {
+    if (!trend) {
+      return null;
+    }
+
+    const normalized = trend.trim();
+    if (!normalized.length) {
+      return null;
+    }
+
+    const lower = normalized.toLowerCase();
+    return lower.charAt(0).toUpperCase() + lower.slice(1);
   }
 }
