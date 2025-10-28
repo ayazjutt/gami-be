@@ -18,7 +18,8 @@ async function bootstrap() {
 
   try {
     const service = app.get(OutputMetricsService);
-    await service.createOutputSnapshots();
+    const runAt = new Date();
+    await service.createOutputSnapshot1(runAt);
     const logger = new Logger('OutputSnapshotsRunner');
     logger.log('MetaVault output snapshots computation completed.');
   } finally {

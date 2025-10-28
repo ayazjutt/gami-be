@@ -73,11 +73,6 @@ export class OutputMetricsService {
 
   async createOutputSnapshots(runAt = new Date()): Promise<void> {
     const settings = await loadOutputSettings(this.prisma);
-    const maturitySnapshotId = await this.resolveMetaVaultSnapshotId(settings);
-    if (!maturitySnapshotId) {
-      this.logger.warn('No MetaVault maturity snapshot resolved; skipping output snapshot creation.');
-      return;
-    }
 
     const metricMap = await this.loadMetricMap();
     if (!metricMap.size) {
@@ -173,7 +168,7 @@ export class OutputMetricsService {
       .map((metric) => metricMap.get(metric.title))
       .filter((value): value is number => typeof value === 'number');
 
-    const previousSnapshots = await this.getPreviousSnapshots(maturitySnapshotId, metricIds, runAt);
+    const previousSnapshots = await this.getPreviousSnapshots(metricIds, runAt);
 
     const payload: Prisma.OutputSnapshotCreateManyInput[] = [];
 
@@ -194,7 +189,6 @@ export class OutputMetricsService {
       const trend = deriveTrend(metric.value, previous?.currentValue ? Number(previous.currentValue) : null);
 
       payload.push({
-        maturitySnapshotId,
         outputMetricId: metricId,
         currentValue: this.toDecimal(metric.value),
         target: this.toDecimal(metric.target),
@@ -223,23 +217,13 @@ export class OutputMetricsService {
     const rows = await this.prisma.outputSnapshot.findMany({
       include: {
         outputMetric: true,
-        maturitySnapshot: {
-          include: {
-            asset: true,
-            tenure: true,
-          },
-        },
       },
       orderBy: {
         createdAt: 'desc',
       },
     });
 
-    return rows.map((row) => {
-      const maturitySnapshot = row.maturitySnapshot;
-      const asset = maturitySnapshot?.asset ?? null;
-      const tenure = maturitySnapshot?.tenure ?? null;
-
+    return rows.map((row: any) => {
       return {
         metric: row.outputMetric?.title ?? 'Unknown Metric',
         currentValue: this.fromDecimal(row.currentValue),
@@ -250,9 +234,9 @@ export class OutputMetricsService {
         status: row.status ?? null,
         trend: this.formatTrend(row.trend),
         scope: {
-          assetId: maturitySnapshot?.assetId ?? null,
-          assetSymbol: asset?.symbol ?? null,
-          tenure: tenure?.title ?? 'ALL',
+          assetId: null,
+          assetSymbol: null,
+          tenure: 'ALL',
         },
         timestamp: row.createdAt.toISOString(),
       } satisfies OutputSnapshotSummary;
@@ -285,7 +269,6 @@ export class OutputMetricsService {
   }
 
   private async getPreviousSnapshots(
-    maturitySnapshotId: number,
     metricIds: number[],
     runAt: Date,
   ): Promise<Map<number, OutputSnapshot>> {
@@ -295,7 +278,6 @@ export class OutputMetricsService {
 
     const rows = await this.prisma.outputSnapshot.findMany({
       where: {
-        maturitySnapshotId,
         outputMetricId: { in: metricIds },
         createdAt: { lt: runAt },
       },
@@ -434,5 +416,108 @@ export class OutputMetricsService {
 
     const lower = normalized.toLowerCase();
     return lower.charAt(0).toUpperCase() + lower.slice(1);
+  }
+
+  // New simple snapshot creator as requested
+  // Steps:
+  // 1) Load settings (target/benchmark)
+  // 2) Get all assets where isRemoved=false and their latest maturity snapshot
+  // 3) Compute MetaVault Net APY across assets using pools[0] ptPrice.usd and ptApy
+  // 4) Persist OutputSnapshot for 'MetaVault Net APY' only (no maturitySnapshot link)
+  async createOutputSnapshot1(runAt = new Date()): Promise<void> {
+    // Loop metrics; keep each metric's computation inside its branch
+    const metrics = await this.prisma.outputMetric.findMany();
+    for (const metric of metrics) {
+      if (metric.title === 'MetaVault Net APY') {
+       await this.processNetApy(runAt, metric);
+      }
+    }
+  }
+
+  async processNetApy(runAt, metric) {
+    // Settings needed for MetaVault Net APY
+      const settingKeys = [
+        'MetaVault Net APY Target',
+        'MetaVault Net APY Benchmark',
+        'metavault.apy.target',
+        'metavault.apy.benchmark',
+      ];
+      const settingRows = await this.prisma.setting.findMany({ where: { key: { in: settingKeys } } });
+      const settingsMap = new Map(settingRows.map((s) => [s.key, s] as const));
+      const parseNum = (k: string): number | null => {
+        const s = settingsMap.get(k);
+        if (!s) return null;
+        if (s.numValue != null) return Number(s.numValue as any);
+        if (s.value != null) {
+          const n = Number(s.value);
+          return Number.isFinite(n) ? n : null;
+        }
+        return null;
+      };
+      const target = parseNum('MetaVault Net APY Target') ?? parseNum('metavault.apy.target');
+      const benchmark = parseNum('MetaVault Net APY Benchmark') ?? parseNum('metavault.apy.benchmark');
+
+      // Fetch all maturities (all assets) for calculation
+      const maturities = await this.prisma.maturitySnapshot.findMany({
+        where: { asset: { isRemoved: false } },
+        include: { asset: true },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      // Calculate Net APY
+      let sumWeighted = 0;
+      let sumPosition = 0;
+      for (const snap of maturities) {
+        const balNum = snap.balance != null ? Number(snap.balance as any) : 0;
+        const balance = Number.isFinite(balNum) ? balNum : 0;
+
+        const pools: any[] = Array.isArray((snap as any).pools) ? ((snap as any).pools as any[]) : [];
+        const p0 = pools[0] ?? null;
+        const ptPriceUsd = p0?.ptPrice?.usd != null ? Number(p0.ptPrice.usd) : null;
+        let ptApy = p0?.ptApy != null ? Number(p0.ptApy) : null;
+        if (ptPriceUsd == null || ptApy == null) continue;
+
+        // Normalize APY to decimal if provided in % (e.g., 8.24 -> 0.0824)
+        if (ptApy > 1) {
+          ptApy = ptApy / 100;
+        }
+
+        const positionValue = (balance / 1e18) * ptPriceUsd;
+        if (!Number.isFinite(positionValue) || positionValue <= 0) continue;
+
+        const weighted = positionValue * ptApy;
+        sumPosition += positionValue;
+        sumWeighted += weighted;
+      }
+
+      const currentValue = sumPosition > 0 ? sumWeighted / sumPosition : null;
+      const vsTarget = currentValue != null && target != null ? currentValue - target : null;
+      const vsBenchmark = currentValue != null && benchmark != null ? currentValue - benchmark : null;
+      const status = vsTarget != null ? (vsTarget > 0 ? '✅' : '❌') : null;
+      const trend = '↗️';
+
+      if (currentValue != null) {
+        const netApyPct = (currentValue * 100).toFixed(2);
+        const aumStr = sumPosition.toLocaleString(undefined, { maximumFractionDigits: 2 });
+        this.logger.log(`MetaVault Net APY ≈ ${netApyPct}% | Total AUM ≈ $${aumStr} USD`);
+      } else {
+        this.logger.warn('MetaVault Net APY could not be computed (insufficient data).');
+      }
+
+      await this.prisma.outputSnapshot.create({
+        data: {
+          outputMetricId: metric.id,
+          currentValue: currentValue != null ? new Prisma.Decimal(currentValue) : null,
+          target: target != null ? new Prisma.Decimal(target) : null,
+          benchmark: benchmark != null ? new Prisma.Decimal(benchmark) : null,
+          vsTarget: vsTarget != null ? new Prisma.Decimal(vsTarget) : null,
+          vsBenchmark: vsBenchmark != null ? new Prisma.Decimal(vsBenchmark) : null,
+          status,
+          trend,
+          createdAt: runAt,
+        },
+      });
+
+      this.logger.log('createOutputSnapshot1: MetaVault Net APY snapshot created.');
   }
 }

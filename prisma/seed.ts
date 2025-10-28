@@ -184,6 +184,49 @@ for (const s of settings) {
   })
 }
 
+  // Additional settings: Targets and Benchmarks (as requested)
+  const additionalSettings = [
+    { key: 'MetaVault Net APY Target',       value: null, numValue: '0.24', notes: null },
+    { key: 'Alpha Generation Target',        value: null, numValue: '0.04', notes: null },
+    { key: 'Sharpe Ratio Target',            value: null, numValue: '3',    notes: null },
+    { key: 'Maximum Drawdown Target',        value: null, numValue: '0.02', notes: null },
+    { key: 'Yield Efficiency Target',        value: null, numValue: '0.97', notes: null },
+    { key: 'Harvest Frequency Target',       value: null, numValue: '2.5',  notes: null },
+    { key: 'Gas Efficiency Target',          value: null, numValue: '0.01', notes: null },
+    { key: 'Slippage Control Target',        value: null, numValue: '0.01', notes: null },
+
+    { key: 'MetaVault Net APY Benchmark',    value: null, numValue: '0.2',  notes: null },
+    { key: 'Alpha Generation Benchmark',     value: null, numValue: '0',    notes: null },
+    { key: 'Sharpe Ratio Benchmark',         value: null, numValue: '2',    notes: null },
+    { key: 'Maximum Drawdown Benchmark',     value: null, numValue: '0.05', notes: null },
+    { key: 'Yield Efficiency Benchmark',     value: null, numValue: '0.95', notes: null },
+    { key: 'Harvest Frequency Benchmark',    value: null, numValue: '1',    notes: null },
+    { key: 'Gas Efficiency Benchmark',       value: null, numValue: '0.02', notes: null },
+    { key: 'Slippage Control Benchmark',     value: null, numValue: '0.02', notes: null },
+
+    // Dot-keys used by OutputSettings (kept in sync with above values)
+    { key: 'metavault.apy.target',           value: null, numValue: '0.24', notes: 'Synced from MetaVault Net APY Target' },
+    { key: 'metavault.apy.benchmark',        value: null, numValue: '0.2',  notes: 'Synced from MetaVault Net APY Benchmark' },
+    // alpha target in bps (4% => 400 bps)
+    { key: 'metavault.alpha.target_bps',     value: null, numValue: '400',  notes: '4% expressed in basis points' },
+    { key: 'metavault.sharpe.target',        value: null, numValue: '3',    notes: 'Synced from Sharpe Ratio Target' },
+    { key: 'metavault.sharpe.benchmark',     value: null, numValue: '2',    notes: 'Synced from Sharpe Ratio Benchmark' },
+    { key: 'metavault.maxdd.limit_pct',      value: null, numValue: '0.02', notes: 'Synced from Maximum Drawdown Target' },
+    { key: 'metavault.maxdd.benchmark_pct',  value: null, numValue: '0.05', notes: 'Synced from Maximum Drawdown Benchmark' },
+    { key: 'harvest.interval.target_days',   value: null, numValue: '2.5',  notes: 'Synced from Harvest Frequency Target (days)' },
+    { key: 'gas.efficiency.min_ratio',       value: null, numValue: '0.01', notes: 'Synced from Gas Efficiency Target' },
+    { key: 'slippage.max_pct',               value: null, numValue: '0.01', notes: 'Synced from Slippage Control Target' },
+    { key: 'metavault.yield.benchmark_pct',  value: null, numValue: '0.95', notes: 'Synced from Yield Efficiency Benchmark' },
+  ];
+
+  for (const s of additionalSettings) {
+    await prisma.setting.upsert({
+      where: { key: s.key },
+      update: { value: s.value, numValue: s.numValue, notes: s.notes ?? undefined },
+      create: s,
+    })
+  }
+
 }
 
 main()

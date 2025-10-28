@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+﻿import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -129,7 +129,7 @@ export class DiscoveryService {
       try {
         await this.processPool(pool);
       } catch (err: any) {
-        this.logger.error(`❌ ${pool.network}:${pool.address} → ${err?.message ?? err}`);
+        this.logger.error(`âŒ ${pool.network}:${pool.address} â†’ ${err?.message ?? err}`);
       }
     }
   }
@@ -145,11 +145,11 @@ export class DiscoveryService {
 
     // 2) Fetch the portfolio items (maturities for this pool)
     const url = `${this.baseUrl}/${pool.network}/portfolio/${pool.address}`;
-    this.logger.log(`🔎 Fetching ${url}`);
+    this.logger.log(`ðŸ”Ž Fetching ${url}`);
     const { data } = await firstValueFrom(this.http.get<PortfolioItem[]>(url));
 
     if (!Array.isArray(data) || data.length === 0) {
-      this.logger.warn(`⚠️ No portfolio items for ${pool.network}:${pool.address}`);
+      this.logger.warn(`âš ï¸ No portfolio items for ${pool.network}:${pool.address}`);
       return;
     }
 
@@ -163,7 +163,7 @@ export class DiscoveryService {
 
   /** Creates one MaturitySnapshot from a portfolio item (ALWAYS create new row) */
   private async createSnapshot(networkId: number, item: PortfolioItem) {
-    // ✅ enforce non-null PT address (API guarantees, but we assert)
+    // âœ… enforce non-null PT address (API guarantees, but we assert)
     const ptAddress = lcStrict(item.address, 'portfolioItem.address');
 
     // upsert PT asset (address must be string, not null)
@@ -171,14 +171,14 @@ export class DiscoveryService {
       where: { networkId_address: { networkId, address: ptAddress } },
       update: {
         name: item.name,
-        symbol: item.ibt?.symbol,                  // ✅ string (not item.ibt?.symbol)
+        symbol: item.symbol ?? item.ibt?.symbol ?? 'UNKNOWN',                  // âœ… string (not item.ibt?.symbol)
         decimals: item.decimals ?? 18,
       },
       create: {
         networkId,
-        address: ptAddress,                   // ✅ string (non-null)
+        address: ptAddress,                   // âœ… string (non-null)
         name: item.name,
-        symbol: item.ibt?.symbol,                  // ✅ string
+        symbol: item.symbol ?? item.ibt?.symbol ?? 'UNKNOWN',                  // âœ… string
         decimals: item.decimals ?? 18,
       },
     });
@@ -192,7 +192,7 @@ export class DiscoveryService {
     const ibtAddress = lc(item.ibt?.address);
     const ytAddress  = lc(item.yt?.address);
 
-    // ✅ create and RETURN the snapshot (so caller gets .id)
+    // âœ… create and RETURN the snapshot (so caller gets .id)
     const snapshot = await this.prisma.maturitySnapshot.create({
       data: {
         assetId: asset.id,
@@ -200,7 +200,7 @@ export class DiscoveryService {
         maturityTs,
         source: 'Spectra Portfolio API',
         name: item.name,
-        symbol: item.symbol,                  // ✅ string (fixes TS2322 at line ~201)
+        symbol: item.symbol,                  // âœ… string (fixes TS2322 at line ~201)
         ibtAddress,
         ytAddress,
         ptAddress,
@@ -319,7 +319,7 @@ export class DiscoveryService {
 
   const rows: Prisma.InputSnapshotCreateManyInput[] = [];
 
-  // UNDERLYING — use generic metric IDs but display includes asset symbol
+  // UNDERLYING â€” use generic metric IDs but display includes asset symbol
   rows.push(buildRow({
     maturitySnapshotId,
     inputRoleId: ROLE_UNDER,
@@ -328,7 +328,7 @@ export class DiscoveryService {
     currentValue: impliedApy,
     previousValue: await prevOf(ROLE_UNDER, METRIC_APY),
     threshold: TH.DEFAULT,
-    status: impliedApy != null ? '✅' : null,
+    status: impliedApy != null ? 'âœ…' : null,
     alert: false,
     source: 'Spectra API',
   }));
@@ -354,7 +354,7 @@ export class DiscoveryService {
     currentValue: liqUnderlying,
     previousValue: await prevOf(ROLE_UNDER, METRIC_LIQUIDITY),
     threshold: TH.LIQUIDITY,
-    status: liqUnderlying != null && liqUnderlying > 0 ? '✅' : null,
+    status: liqUnderlying != null && liqUnderlying > 0 ? 'âœ…' : null,
     alert: false,
     source: 'Spectra API',
   }));
@@ -372,7 +372,7 @@ export class DiscoveryService {
     source: 'Spectra API',
   }));
 
-  // PT — generic IDs ('3M Price', '3M Fair Value'), display includes PT and asset symbol
+  // PT â€” generic IDs ('3M Price', '3M Fair Value'), display includes PT and asset symbol
   rows.push(buildRow({
     maturitySnapshotId,
     inputRoleId: ROLE_PT,
@@ -381,7 +381,7 @@ export class DiscoveryService {
     currentValue: ptPriceUsd,
     previousValue: await prevOf(ROLE_PT, METRIC_PRICE_GENERIC),
     threshold: TH.PT_MISPRICE,
-    status: ptPriceUsd != null ? '✅' : null,
+    status: ptPriceUsd != null ? 'âœ…' : null,
     alert: overThreshold(ptMispricingPct, TH.PT_MISPRICE),
     source: 'Spectra API',
   }));
@@ -394,12 +394,12 @@ export class DiscoveryService {
     currentValue: fairValueUsd,
     previousValue: await prevOf(ROLE_PT, METRIC_FAIR_GENERIC),
     threshold: TH.PT_MISPRICE,
-    status: fairValueUsd != null ? '✅' : null,
+    status: fairValueUsd != null ? 'âœ…' : null,
     alert: false,
     source: 'Spectra API',
   }));
 
-  // YT — price uses same generic metric id (e.g. '3M Price') but role is YT;
+  // YT â€” price uses same generic metric id (e.g. '3M Price') but role is YT;
   // accumulated uses its own generic 'YT-3M Accumulated'
   rows.push(buildRow({
     maturitySnapshotId,
@@ -409,7 +409,7 @@ export class DiscoveryService {
     currentValue: ytPriceUsd,
     previousValue: await prevOf(ROLE_YT, METRIC_PRICE_GENERIC),
     threshold: TH.YT_MISPRICE,
-    status: ytPriceUsd != null ? '✅' : null,
+    status: ytPriceUsd != null ? 'âœ…' : null,
     alert: false,
     source: 'Spectra API',
   }));
@@ -501,7 +501,7 @@ function buildRow(opts: {
 }
 function pegStatus(usd: number | null, thr: number | null): string | null {
   if (usd == null || thr == null) return null;
-  return Math.abs(usd - 1) <= thr ? '✅' : '⚠️';
+  return Math.abs(usd - 1) <= thr ? 'âœ…' : 'âš ï¸';
 }
 function pegAlert(usd: number | null, thr: number | null): boolean {
   if (usd == null || thr == null) return false;
@@ -511,3 +511,4 @@ function overThreshold(valuePct: number | null, thrPct: number | null): boolean 
   if (valuePct == null || thrPct == null) return false;
   return valuePct > thrPct;
 }
+

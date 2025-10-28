@@ -102,6 +102,7 @@ model Asset {
   name       String
   symbol     String
   decimals   Int
+  isRemoved  Boolean   @default(false)
 
   maturitySnapshots MaturitySnapshot[]
 
@@ -149,7 +150,6 @@ model MaturitySnapshot {
 
   // Input/Output/Alert snapshots attach here
   inputSnapshots    InputSnapshot[]
-  outputSnapshots   OutputSnapshot[]
   alertSnapshots    AlertSnapshot[]
 
   createdAt         DateTime  @default(now())
@@ -219,9 +219,6 @@ model OutputMetric {
 /* 8. Output Snapshot */
 model OutputSnapshot {
   id                 Int            @id @default(autoincrement())
-  maturitySnapshotId Int
-  maturitySnapshot   MaturitySnapshot @relation(fields: [maturitySnapshotId], references: [id], onDelete: Cascade)
-
   outputMetricId     Int
   outputMetric       OutputMetric   @relation(fields: [outputMetricId], references: [id], onDelete: Cascade)
 
@@ -235,7 +232,7 @@ model OutputSnapshot {
 
   createdAt          DateTime       @default(now())
 
-  @@index([maturitySnapshotId, outputMetricId])
+  @@index([outputMetricId])
 }
 
 /* 9. Alert Metric (seed) */
