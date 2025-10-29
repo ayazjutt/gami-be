@@ -171,14 +171,14 @@ export class DiscoveryService {
       where: { networkId_address: { networkId, address: ptAddress } },
       update: {
         name: item.name,
-        symbol: item.symbol ?? item.ibt?.symbol ?? 'UNKNOWN',                  // âœ… string (not item.ibt?.symbol)
+        symbol: item.ibt?.symbol ?? 'UNKNOWN',                  // âœ… string (not item.ibt?.symbol)
         decimals: item.decimals ?? 18,
       },
       create: {
         networkId,
         address: ptAddress,                   // âœ… string (non-null)
         name: item.name,
-        symbol: item.symbol ?? item.ibt?.symbol ?? 'UNKNOWN',                  // âœ… string
+        symbol: item.ibt?.symbol ?? 'UNKNOWN',                  // âœ… string
         decimals: item.decimals ?? 18,
       },
     });
@@ -200,7 +200,7 @@ export class DiscoveryService {
         maturityTs,
         source: 'Spectra Portfolio API',
         name: item.name,
-        symbol: item.symbol,                  // âœ… string (fixes TS2322 at line ~201)
+        symbol: item.ibt?.symbol ?? 'UNKNOWN',                  // âœ… string (fixes TS2322 at line ~201)
         ibtAddress,
         ytAddress,
         ptAddress,

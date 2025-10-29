@@ -8,6 +8,8 @@ import { DiscoveryModule } from './discovery/discovery.module';
 import { SnapshotsModule } from './snapshots/snapshots.module';
 import { SheetsModule } from './sheets/sheets.module';
 import { OutputsModule } from './outputs/outputs.module';
+import { AlertMetricsModule } from './alert-metrics/alert-metrics.module';
+import { PtTrackingModule } from './pt-tracking/pt-tracking.module';
 
 @Module({
   imports: [
@@ -18,6 +20,8 @@ import { OutputsModule } from './outputs/outputs.module';
     SnapshotsModule,
     SheetsModule,
     OutputsModule,
+    AlertMetricsModule,
+    PtTrackingModule,
   ],
   controllers: [AppController],
   providers: [AppService],
