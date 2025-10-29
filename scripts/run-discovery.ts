@@ -3,7 +3,7 @@ import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { Module } from '@nestjs/common';
 import { DiscoveryModule } from '../src/discovery/discovery.module';
-import { DiscoveryService } from '../src/discovery/discovery.service';
+import { DiscoveryMaturityService } from '../src/discovery/discovery.maturity.service';
 
 @Module({
   imports: [DiscoveryModule],
@@ -16,7 +16,7 @@ async function bootstrap() {
   });
 
   try {
-    const svc = app.get(DiscoveryService);
+    const svc = app.get(DiscoveryMaturityService);
     await svc.runOnce();
   } catch (e) {
     console.error(e);

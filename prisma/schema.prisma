@@ -7,102 +7,27 @@ generator client {
   provider = "prisma-client-js"
 }
 
-
-enum Priority {
-  LOW
-  MEDIUM
-  HIGH
-  CRITICAL
-}
-
-enum ActionRequired {
-  NONE
-  MONITOR
-  REBALANCE
-  HARVEST
-  CLAIM
-  HEDGE
-  ALLOCATE
-  DEALLOCATE
-}
-
-enum AutoAction {
-  NONE
-  REBALANCE
-  HARVEST
-  CLAIM
-  SWAP
-}
-
-enum ManualReview {
-  NONE
-  REVIEW
-  ESCALATE
-  APPROVE
-  REJECT
-}
-
-enum ArbitrageSignal {
-  NONE
-  BUY_PT
-  SELL_PT
-  BUY_YT
-  SELL_YT
-  ARB_OPPORTUNITY
-}
-
-enum GenericAction {
-  NONE
-  BUY
-  SELL
-  HOLD
-  HARVEST
-  REBALANCE
-  CLAIM
-}
-
-enum HarvestSignal {
-  NONE
-  READY
-  WAIT
-}
-
-enum RebalanceSignal {
-  NONE
-  INCREASE
-  DECREASE
-  ENTER
-  EXIT
-}
-
-enum ClaimSignal {
-  NONE
-  CLAIM_NOW
-  WAIT
-}
-
-/* 1. Network */
 model Network {
-  id        Int      @id @default(autoincrement())
-  name      String   @unique       // e.g., Base, Arbitrum, Mainnet, Optimism, Sonic, Hemi, HyperEVM
-  slug      String   @unique       // e.g., base, arbitrum, mainnet
-  chainId   Int?     @unique
+  id        Int     @id @default(autoincrement())
+  name      String  @unique
+  slug      String  @unique
+  chainId   Int?    @unique
 
   assets    Asset[]
+
   @@index([slug])
 }
 
-/* 2. Asset */
 model Asset {
-  id         Int       @id @default(autoincrement())
+  id         Int      @id @default(autoincrement())
   networkId  Int
-  network    Network   @relation(fields: [networkId], references: [id], onDelete: Cascade)
+  network    Network  @relation(fields: [networkId], references: [id], onDelete: Cascade)
 
   address    String
   name       String
   symbol     String
   decimals   Int
-  isRemoved  Boolean   @default(false)
+  isRemoved  Boolean  @default(false)
 
   maturitySnapshots MaturitySnapshot[]
 
@@ -111,29 +36,12 @@ model Asset {
   @@index([symbol])
 }
 
-/* 3. Tenure (seed: 3M, 6M, 12M) */
-model Tenure {
-  id       Int     @id @default(autoincrement())
-  title    String  @unique // "3M", "6M", "12M"
-
-  // referenced by snapshots below
-  ptTrackingSnapshots  PTTrackingSnapshot[]
-  ytTrackingSnapshots  YTTrackingSnapshot[]
-  lpPoolsSnapshots     LPPoolsSnapshot[]
-  spectraSnapshots     SpectraSnapshot[]
-  maturitySnapshots    MaturitySnapshot[]
-}
-
-/* 3. (cont.) Maturity Snapshot */
 model MaturitySnapshot {
-  id                Int       @id @default(autoincrement())
+  id                Int      @id @default(autoincrement())
   assetId           Int
-  asset             Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  asset             Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
-  tenureId          Int?
-  tenure            Tenure?   @relation(fields: [tenureId], references: [id])
-
-  maturityTs        DateTime  // from API "maturity" (unix -> timestamptz)
+  maturityTs        DateTime
   source            String
   name              String
   symbol            String
@@ -142,241 +50,43 @@ model MaturitySnapshot {
   ytAddress         String?
   ptAddress         String?
 
-  maturityCreatedAt DateTime? // from API "createdAt"
-  balance           String?   // keep as text due to bigints in JSON
+  maturityCreatedAt DateTime?
+  balance           String?
+  pools             Json?
+  payload           Json
 
-  pools             Json?     // pools JSON blob (denormalized)
-  payload           Json      // full API payload JSON blob
+  createdAt         DateTime @default(now())
 
-  // Input/Output snapshots attach here
+  // Back-reference for InputSnapshot relation
   inputSnapshots    InputSnapshot[]
-  // Tracking snapshots linking back to this maturity
-  ptTrackingSnapshots PTTrackingSnapshot[]
-  ytTrackingSnapshots YTTrackingSnapshot[]
-  lpPoolsSnapshots    LPPoolsSnapshot[]
-
-  createdAt         DateTime  @default(now())
 
   @@index([assetId, maturityTs])
-  @@index([tenureId])
 }
 
-/* 4. Input Role (seed) */
-model InputRole {
-  id     Int      @id @default(autoincrement())
-  title  String   @unique // 'UNDERLYING ASSETS','PRINCIPAL TOKENS (PT)','YIELD TOKENS (YT)'
-
-  inputSnapshots InputSnapshot[]
-}
-
-/* 5. Input Metric (seed) */
-model InputMetric {
-  id     Int     @id @default(autoincrement())
-  title  String  @unique
-  // examples to seed exactly as requested:
-  // 'sUSDe APY','sUSDe Peg Stability','sUSDe Liquidity Depth','Gas Price (Gwei)',
-  // 'PT-sUSDe-3M Price','PT-sUSDe-6M Price','PT-sUSDe-12M Price',
-  // 'PT-3M Fair Value','PT-6M Fair Value','PT-12M Fair Value',
-  // 'YT-sUSDe-3M Price','YT-sUSDe-6M Price','YT-sUSDe-12M Price',
-  // 'YT-3M Accumulated','YT-6M Accumulated','YT-12M Accumulated'
-
-  inputSnapshots InputSnapshot[]
-}
-
-/* 6. Input Snapshot */
 model InputSnapshot {
-  id                Int            @id @default(autoincrement())
-  maturitySnapshotId Int
-  maturitySnapshot   MaturitySnapshot @relation(fields: [maturitySnapshotId], references: [id], onDelete: Cascade)
+  id                  Int               @id @default(autoincrement())
+  maturitySnapshotId  Int
+  maturitySnapshot    MaturitySnapshot  @relation(fields: [maturitySnapshotId], references: [id], onDelete: Cascade)
 
-  inputRoleId       Int
-  inputRole         InputRole       @relation(fields: [inputRoleId], references: [id], onDelete: Cascade)
+  metric              String
+  currentValue        Decimal?          @db.Decimal(38, 18)
+  previousValue       Decimal?          @db.Decimal(38, 18)
+  changePercentage    Decimal?          @db.Decimal(38, 18)
+  threshold           Decimal?          @db.Decimal(38, 18)
 
-  inputMetricId     Int
-  inputMetric       InputMetric     @relation(fields: [inputMetricId], references: [id], onDelete: Cascade)
+  status              String?
+  alert               Boolean?          @default(false)
+  source              String?
+  note                String?
 
-  timestamp         DateTime
-  metric            String?         // free text label mirroring column "Metric" if needed
-  currentValue      Decimal?        @db.Decimal(38, 18)
-  previousValue     Decimal?        @db.Decimal(38, 18)
-  changePct         Decimal?        @db.Decimal(38, 18)
-  threshold         Decimal?        @db.Decimal(38, 18)
-  status            String?         // '✅', '⚠️', etc or OK/WARN
-  alert             Boolean?        @default(false)
-  source            String?
-  notes             String?
+  createdAt           DateTime          @default(now())
 
-  @@index([maturitySnapshotId, inputRoleId, inputMetricId])
+  @@index([maturitySnapshotId, metric])
 }
 
-/* 7. Output Metric (seed) */
-model OutputMetric {
-  id    Int     @id @default(autoincrement())
-  title String  @unique
-  // 'MetaVault Net APY','Alpha Generation','Sharpe Ratio','Maximum Drawdown',
-  // 'Yield Efficiency','Harvest Frequency','Gas Efficiency','Slippage Control'
-
-  outputSnapshots OutputSnapshot[]
-}
-
-/* 8. Output Snapshot */
-model OutputSnapshot {
-  id                 Int            @id @default(autoincrement())
-  outputMetricId     Int
-  outputMetric       OutputMetric   @relation(fields: [outputMetricId], references: [id], onDelete: Cascade)
-
-  currentValue       Decimal?       @db.Decimal(38, 18)
-  target             Decimal?       @db.Decimal(38, 18)
-  benchmark          Decimal?       @db.Decimal(38, 18)
-  vsTarget           Decimal?       @db.Decimal(38, 18)
-  vsBenchmark        Decimal?       @db.Decimal(38, 18)
-  status             String?        // e.g., 'On Track', 'Lagging'
-  trend              String?        // e.g., 'Up', 'Down', 'Flat'
-
-  createdAt          DateTime       @default(now())
-
-  @@index([outputMetricId])
-}
-
-/* 9. Alert Metric (seed) */
-model AlertMetric {
-  id     Int    @id @default(autoincrement())
-  title  String @unique
-  // 'PT-3M Mispricing','YT-3M Harvest','Liquidity Crisis','Gas Spike','Maturity Alert'
-
-  alertSnapshots AlertSnapshot[]
-}
-
-/* 10. Alert Snapshot */
-model AlertSnapshot {
-  id               Int            @id @default(autoincrement())
-  alertMetricId    Int
-  alertMetric      AlertMetric    @relation(fields: [alertMetricId], references: [id], onDelete: Cascade)
-
-  alertType        String?        // free-form if needed
-  conditionMet     Boolean        @default(false)
-  currentValue     Decimal?       @db.Decimal(38, 18)
-  threshold        Decimal?       @db.Decimal(38, 18)
-
-  priority         Priority       @default(MEDIUM)
-  actionRequired   ActionRequired @default(MONITOR)
-  autoAction       AutoAction     @default(NONE)
-  manualReview     ManualReview   @default(REVIEW)
-
-  createdAt        DateTime       @default(now())
-
-  @@index([alertMetricId])
-}
-
-/* 11. PT Tracking Snapshot */
-model PTTrackingSnapshot {
-  id           Int            @id @default(autoincrement())
-  tenureId     Int?
-  tenure       Tenure?        @relation(fields: [tenureId], references: [id], onDelete: Cascade)
-
-  // Link to the originating maturity snapshot
-  maturitySnapshotId Int
-  maturitySnapshot   MaturitySnapshot @relation(fields: [maturitySnapshotId], references: [id], onDelete: Cascade)
-
-  maturity     DateTime
-  marketPrice  Decimal?       @db.Decimal(38, 18)
-  fairValue    Decimal?       @db.Decimal(38, 18)
-  mispricingPct Decimal?      @db.Decimal(38, 18)
-  impliedApy   Decimal?       @db.Decimal(38, 18)
-  liquidityScore Decimal?     @db.Decimal(38, 18)
-  bidAskSpread Decimal?       @db.Decimal(38, 18)
-  volume24h    Decimal?       @db.Decimal(38, 18)
-
-  arbitrageSignal ArbitrageSignal @default(NONE)
-  action          GenericAction   @default(NONE)
-
-  createdAt    DateTime       @default(now())
-
-  @@index([tenureId, maturity])
-  @@index([maturitySnapshotId])
-}
-
-/* 12. YT Tracking Snapshot */
-model YTTrackingSnapshot {
-  id              Int            @id @default(autoincrement())
-  tenureId        Int?
-  tenure          Tenure?        @relation(fields: [tenureId], references: [id], onDelete: Cascade)
-
-  // Link to the originating maturity snapshot
-  maturitySnapshotId Int
-  maturitySnapshot   MaturitySnapshot @relation(fields: [maturitySnapshotId], references: [id], onDelete: Cascade)
-
-  maturity        DateTime
-  marketPrice     Decimal?       @db.Decimal(38, 18)
-  impliedApy      Decimal?       @db.Decimal(38, 18)
-  accumulatedYield Decimal?      @db.Decimal(38, 18)
-  harvestThreshold Decimal?      @db.Decimal(38, 18)
-  daysSinceHarvest Int? 
-  dailyYieldEst   Decimal?       @db.Decimal(38, 18)
-  harvestSignal   HarvestSignal  @default(NONE)
-  gasCostEst      Decimal?       @db.Decimal(38, 18)
-  netValue        Decimal?       @db.Decimal(38, 18)
-  action          GenericAction  @default(NONE)
-
-  createdAt       DateTime       @default(now())
-
-  @@index([tenureId, maturity])
-  @@index([maturitySnapshotId])
-}
-
-/* 13. LP Pools Snapshot */
-model LPPoolsSnapshot {
-  id              Int            @id @default(autoincrement())
-  tenureId        Int?
-  tenure          Tenure?        @relation(fields: [tenureId], references: [id], onDelete: Cascade)
-
-  // Link to the originating maturity snapshot
-  maturitySnapshotId Int
-  maturitySnapshot   MaturitySnapshot @relation(fields: [maturitySnapshotId], references: [id], onDelete: Cascade)
-
-  pool            String
-  tvl             Decimal?       @db.Decimal(38, 18)
-  apy             Decimal?       @db.Decimal(38, 18)
-  volume24h       Decimal?       @db.Decimal(38, 18)
-  ourAllocation   Decimal?       @db.Decimal(38, 18)
-  ourSharePct     Decimal?       @db.Decimal(38, 18)
-  dailyFees       Decimal?       @db.Decimal(38, 18)
-  liquidityHealth String?
-  efficiencyScore Decimal?       @db.Decimal(38, 18)
-  targetAllocation Decimal?      @db.Decimal(38, 18)
-  rebalanceSignal RebalanceSignal @default(NONE)
-
-  createdAt       DateTime       @default(now())
-
-  @@index([tenureId, pool])
-  @@index([maturitySnapshotId])
-}
-
-/* 14. Spectra Snapshot */
-model SpectraSnapshot {
-  id              Int            @id @default(autoincrement())
-  tenureId        Int
-  tenure          Tenure         @relation(fields: [tenureId], references: [id], onDelete: Cascade)
-
-  pool            String
-  spectraPerDay   Decimal?       @db.Decimal(38, 18)
-  accumulated     Decimal?       @db.Decimal(38, 18)
-  usdValue        Decimal?       @db.Decimal(38, 18)
-  claimThreshold  Decimal?       @db.Decimal(38, 18)
-  daysSinceClaim  Int?
-  claimSignal     ClaimSignal    @default(NONE)
-  veSpectraBoost  Decimal?       @db.Decimal(38, 18)
-  action          GenericAction  @default(NONE)
-
-  createdAt       DateTime       @default(now())
-
-  @@index([tenureId, pool])
-}
-
-/* 15. Settings */
 model Setting {
-  id       Int     @id @default(autoincrement())
-  key      String  @unique
+  id       Int      @id @default(autoincrement())
+  key      String   @unique
   value    String?
   numValue Decimal? @db.Decimal(38, 18)
   notes    String?

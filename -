@@ -1,0 +1,35 @@
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { DiscoveryMaturityService } from './discovery.maturity.service';
+
+type MetricDef = { key: string; title: string };
+
+@Injectable()
+export class DoscoveryInputService {
+  private readonly logger = new Logger(DoscoveryInputService.name);
+
+  // Metrics catalog
+  readonly metrics: MetricDef[] = [
+    { key: 'apy', title: 'APY' },
+    { key: 'peg_stability', title: 'Peg Stability' },
+    { key: 'liquidity_depth', title: 'Liquidity Depth' },
+    { key: 'gas_price', title: 'Gas Price (Gwei)' },
+    { key: 'pt_price', title: 'PT-ASSET Price' },
+    { key: 'pt_fair_value', title: 'PT-ASSET Fair Value' },
+    { key: 'yt_price', title: 'YT-ASSET Price' },
+    { key: 'yt_accumulated', title: 'YT ASSET Accumulated' },
+  ];
+
+  constructor(
+    @Inject(forwardRef(() => DiscoveryMaturityService))
+    private readonly maturity: DiscoveryMaturityService,
+  ) {}
+
+  async calc() {
+    // Fetch latest maturity snapshots per asset
+    const maturities = await this.maturity.getLatestMaturities();
+    // todo: loop all the maturities and inside the loop create a new function to do the calculations for apy and call here
+
+    console.log((maturities));
+    return maturities;
+  }
+}

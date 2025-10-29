@@ -5,8 +5,8 @@ import { OutputMetricsService, OutputSnapshotSummary } from './output-metrics.se
 export class OutputSnapshotsController {
   constructor(private readonly outputMetricsService: OutputMetricsService) {}
 
-  @Get()
-  async getAll(): Promise<OutputSnapshotSummary[]> {
-    return this.outputMetricsService.getAllOutputSnapshots();
-  }
+  // @Get()
+  // async getAll(): Promise<OutputSnapshotSummary[]> {
+  //   return this.outputMetricsService.getAllOutputSnapshots();
+  // }
 }
