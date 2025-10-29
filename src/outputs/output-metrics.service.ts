@@ -427,14 +427,36 @@ export class OutputMetricsService {
   async createOutputSnapshot1(runAt = new Date()): Promise<void> {
     // Loop metrics; keep each metric's computation inside its branch
     const metrics = await this.prisma.outputMetric.findMany();
+    let netApyValue: number | null = null;
     for (const metric of metrics) {
       if (metric.title === 'MetaVault Net APY') {
-       await this.processNetApy(runAt, metric);
+       netApyValue = await this.processNetApy(runAt, metric);
+      }
+      if (metric.title === 'Alpha Generation') {
+       await this.processAlphaGeneration(runAt, metric);
+      }
+      if (metric.title === 'Sharpe Ratio') {
+       await this.processSharpeRatio(runAt, metric, netApyValue);
+      }
+      if (metric.title === 'Maximum Drawdown') {
+       await this.processMaximumDrawdown(runAt, metric);
+      }
+      if (metric.title === 'Yield Efficiency') {
+       await this.processYieldEfficiency(runAt, metric);
+      }
+      if (metric.title === 'Harvest Frequency') {
+       await this.processHarvestFrequency(runAt, metric);
+      }
+      if (metric.title === 'Gas Efficiency') {
+       await this.processGasEfficiency(runAt, metric);
+      }
+      if (metric.title === 'Slippage Control') {
+       await this.processSlippageControl(runAt, metric);
       }
     }
   }
 
-  async processNetApy(runAt, metric) {
+  async processNetApy(runAt, metric): Promise<number | null> {
     // Settings needed for MetaVault Net APY
       const settingKeys = [
         'MetaVault Net APY Target',
@@ -517,7 +539,520 @@ export class OutputMetricsService {
           createdAt: runAt,
         },
       });
-
       this.logger.log('createOutputSnapshot1: MetaVault Net APY snapshot created.');
+      return currentValue;
+  }
+
+  async processAlphaGeneration(runAt, metric) {
+    // Settings needed for Alpha Generation
+    const settingKeys = [
+      'Alpha Generation Target',
+      'Alpha Generation Benchmark',
+      'riskfree.rate',
+      'Risk-Free Rate',
+    ];
+    const settingRows = await this.prisma.setting.findMany({ where: { key: { in: settingKeys } } });
+    const settingsMap = new Map(settingRows.map((s) => [s.key, s] as const));
+    const parseNum = (k: string): number | null => {
+      const s: any = settingsMap.get(k);
+      if (!s) return null;
+      if (s.numValue != null) return Number(s.numValue);
+      if (s.value != null) {
+        const n = Number(s.value);
+        return Number.isFinite(n) ? n : null;
+      }
+      return null;
+    };
+
+    const target = parseNum('Alpha Generation Target');
+    const benchmark = parseNum('Alpha Generation Benchmark');
+    const riskFree = parseNum('riskfree.rate') ?? parseNum('Risk-Free Rate');
+
+    // Compute current Net APY similarly to processNetApy
+    const maturities = await this.prisma.maturitySnapshot.findMany({
+      where: { asset: { isRemoved: false } },
+      include: { asset: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    let sumWeighted = 0;
+    let sumPosition = 0;
+    for (const snap of maturities as any[]) {
+      const balNum = snap.balance != null ? Number(snap.balance as any) : 0;
+      const balance = Number.isFinite(balNum) ? balNum : 0;
+
+      const pools: any[] = Array.isArray((snap as any).pools) ? ((snap as any).pools as any[]) : [];
+      const p0 = pools[0] ?? null;
+      const ptPriceUsd = p0?.ptPrice?.usd != null ? Number(p0.ptPrice.usd) : null;
+      let ptApy = p0?.ptApy != null ? Number(p0.ptApy) : null;
+      if (ptPriceUsd == null || ptApy == null) continue;
+
+      if (ptApy > 1) {
+        ptApy = ptApy / 100;
+      }
+
+      const positionValue = (balance / 1e18) * ptPriceUsd;
+      if (!Number.isFinite(positionValue) || positionValue <= 0) continue;
+
+      const weighted = positionValue * ptApy;
+      sumPosition += positionValue;
+      sumWeighted += weighted;
+    }
+
+    const netApy = sumPosition > 0 ? sumWeighted / sumPosition : null;
+    const currentValue = netApy != null && riskFree != null ? netApy - riskFree : null;
+    const vsTarget = currentValue != null && target != null ? currentValue - target : null;
+    const vsBenchmark = currentValue != null && benchmark != null ? currentValue - benchmark : null;
+    const status = vsTarget != null ? (vsTarget > 0 ? '✅' : '❌') : null;
+    const trend = '↗️';
+
+    await this.prisma.outputSnapshot.create({
+      data: {
+        outputMetricId: metric.id,
+        currentValue: currentValue != null ? new Prisma.Decimal(currentValue) : null,
+        target: target != null ? new Prisma.Decimal(target) : null,
+        benchmark: benchmark != null ? new Prisma.Decimal(benchmark) : null,
+        vsTarget: vsTarget != null ? new Prisma.Decimal(vsTarget) : null,
+        vsBenchmark: vsBenchmark != null ? new Prisma.Decimal(vsBenchmark) : null,
+        status,
+        trend,
+        createdAt: runAt,
+      },
+    });
+
+    this.logger.log('createOutputSnapshot1: Alpha Generation snapshot created.');
+  }
+
+  async processSharpeRatio(runAt, metric, netApyValue?: number | null) {
+    // Get risk-free and Sharpe targets/benchmarks from settings
+    const keys = [
+      'riskfree.rate',
+      'Risk-Free Rate',
+      'Sharpe Ratio Target',
+      'Sharpe Ratio Benchmark',
+      'metavault.sharpe.target',
+      'metavault.sharpe.benchmark',
+    ];
+    const settingRows = await this.prisma.setting.findMany({ where: { key: { in: keys } } });
+    const smap = new Map(settingRows.map((s) => [s.key, s] as const));
+    const getNum = (k: string): number | null => {
+      const s: any = smap.get(k);
+      if (!s) return null;
+      if (s.numValue != null) return Number(s.numValue);
+      if (s.value != null) {
+        const n = Number(s.value);
+        return Number.isFinite(n) ? n : null;
+      }
+      return null;
+    };
+
+    const riskFree = getNum('riskfree.rate') ?? getNum('Risk-Free Rate') ?? 0;
+    const target = getNum('Sharpe Ratio Target') ?? getNum('metavault.sharpe.target');
+    const benchmark = getNum('Sharpe Ratio Benchmark') ?? getNum('metavault.sharpe.benchmark');
+
+    // If MetaVault Net APY isn't provided, compute it on the fly (same method as processNetApy)
+    let currentNetApy = netApyValue ?? null;
+    if (currentNetApy == null) {
+      const maturities = await this.prisma.maturitySnapshot.findMany({
+        where: { asset: { isRemoved: false } },
+        include: { asset: true },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      let sumWeighted = 0;
+      let sumPosition = 0;
+      for (const snap of maturities as any[]) {
+        const balNum = snap.balance != null ? Number(snap.balance as any) : 0;
+        const balance = Number.isFinite(balNum) ? balNum : 0;
+        const pools: any[] = Array.isArray((snap as any).pools) ? ((snap as any).pools as any[]) : [];
+        const p0 = pools[0] ?? null;
+        const ptPriceUsd = p0?.ptPrice?.usd != null ? Number(p0.ptPrice.usd) : null;
+        let ptApy = p0?.ptApy != null ? Number(p0.ptApy) : null;
+        if (ptPriceUsd == null || ptApy == null) continue;
+        if (ptApy > 1) ptApy = ptApy / 100;
+        const positionValue = (balance / 1e18) * ptPriceUsd;
+        if (!Number.isFinite(positionValue) || positionValue <= 0) continue;
+        sumPosition += positionValue;
+        sumWeighted += positionValue * ptApy;
+      }
+      currentNetApy = sumPosition > 0 ? sumWeighted / sumPosition : null;
+    }
+
+    // ( Std Deviation ) Let’s assume the MetaVault’s daily return volatility over 30 days is 0.0005 (0.05 %) — this comes from your historical NAV or APY time-series.
+    const StdDeviation = 0.0005;
+    // Current Value per request: netApy - riskFree (annual decimals)
+    const dailyReturn = currentNetApy != null ? Math.pow(1 + currentNetApy, 1 / 365) - 1 : null;
+    const rfDaily = Math.pow(1 + riskFree, 1 / 365) - 1;
+    const currentValue = dailyReturn != null ? (dailyReturn - rfDaily) / StdDeviation : null;
+    const vsTarget = currentValue != null && target != null ? currentValue - target : null;
+    const vsBenchmark = currentValue != null && benchmark != null ? currentValue - benchmark : null;
+    const status = vsTarget != null ? (vsTarget > 0 ? '✅' : '❌') : null;
+    const trend = '↗️';
+
+    await this.prisma.outputSnapshot.create({
+      data: {
+        outputMetricId: metric.id,
+        currentValue: currentValue != null ? new Prisma.Decimal(currentValue) : null,
+        target: target != null ? new Prisma.Decimal(target) : null,
+        benchmark: benchmark != null ? new Prisma.Decimal(benchmark) : null,
+        vsTarget: vsTarget != null ? new Prisma.Decimal(vsTarget) : null,
+        vsBenchmark: vsBenchmark != null ? new Prisma.Decimal(vsBenchmark) : null,
+        status,
+        trend,
+        createdAt: runAt,
+      },
+    });
+
+    this.logger.log('createOutputSnapshot1: Sharpe Ratio snapshot created.');
+  }
+
+  async processMaximumDrawdown(runAt, metric) {
+    // Load targets/benchmarks from settings; convert decimals to negative percent
+    const keys = [
+      'Maximum Drawdown Target',
+      'Maximum Drawdown Benchmark',
+      'metavault.maxdd.limit_pct',
+      'metavault.maxdd.benchmark_pct',
+    ];
+    const rows = await this.prisma.setting.findMany({ where: { key: { in: keys } } });
+    const smap = new Map(rows.map((s) => [s.key, s] as const));
+    const getNum = (k: string): number | null => {
+      const s: any = smap.get(k);
+      if (!s) return null;
+      if (s.numValue != null) return Number(s.numValue);
+      if (s.value != null) {
+        const n = Number(s.value);
+        return Number.isFinite(n) ? n : null;
+      }
+      return null;
+    };
+
+    const tRaw = getNum('metavault.maxdd.limit_pct') ?? getNum('Maximum Drawdown Target');
+    const bRaw = getNum('metavault.maxdd.benchmark_pct') ?? getNum('Maximum Drawdown Benchmark');
+    const target = tRaw != null ? -(tRaw * 100) : -2; // percent, negative
+    const benchmark = bRaw != null ? -(bRaw * 100) : -5; // percent, negative
+
+    // Build daily NAV history since inception
+    const snapshots = await this.prisma.spectraSnapshot.findMany({
+      orderBy: { createdAt: 'asc' },
+    });
+    const byDate = new Map<string, number>();
+    for (const s of snapshots) {
+      if (!s.createdAt || s.usdValue == null) continue;
+      const day = s.createdAt.toISOString().slice(0, 10);
+      const val = Number(s.usdValue);
+      if (!Number.isFinite(val)) continue;
+      byDate.set(day, (byDate.get(day) ?? 0) + val);
+    }
+
+    const series = Array.from(byDate.entries())
+      .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .map(([, v]) => v);
+
+    let currentValue: number | null = null;
+    if (series.length) {
+      let peak = series[0];
+      let minDrawdownPct = 0; // percent (negative or zero)
+      for (const nav of series) {
+        if (nav > peak) peak = nav;
+        if (peak > 0) {
+          const dd = ((nav - peak) / peak) * 100; // <= 0
+          if (dd < minDrawdownPct) minDrawdownPct = dd;
+        }
+      }
+      currentValue = minDrawdownPct;
+    }
+
+    const vsTarget = currentValue != null && target != null ? currentValue - target : null;
+    const vsBenchmark = currentValue != null && benchmark != null ? currentValue - benchmark : null;
+    const status = vsTarget != null ? (vsTarget > 0 ? '✅' : '❌') : null;
+    const trend = '↗️';
+
+    await this.prisma.outputSnapshot.create({
+      data: {
+        outputMetricId: metric.id,
+        currentValue: currentValue != null ? new Prisma.Decimal(currentValue) : null,
+        target: target != null ? new Prisma.Decimal(target) : null,
+        benchmark: benchmark != null ? new Prisma.Decimal(benchmark) : null,
+        vsTarget: vsTarget != null ? new Prisma.Decimal(vsTarget) : null,
+        vsBenchmark: vsBenchmark != null ? new Prisma.Decimal(vsBenchmark) : null,
+        status,
+        trend,
+        createdAt: runAt,
+      },
+    });
+
+    this.logger.log('createOutputSnapshot1: Maximum Drawdown snapshot created.');
+  }
+
+  async processYieldEfficiency(runAt, metric) {
+    // Load settings required to compute target yield and thresholds
+    const keys = [
+      'MetaVault Net APY Target',
+      'metavault.apy.target',
+      'Yield Efficiency Target',
+      'Yield Efficiency Benchmark',
+      'metavault.yield.benchmark_pct',
+    ];
+    const rows = await this.prisma.setting.findMany({ where: { key: { in: keys } } });
+    const smap = new Map(rows.map((s) => [s.key, s] as const));
+    const getNum = (k: string): number | null => {
+      const s: any = smap.get(k);
+      if (!s) return null;
+      if (s.numValue != null) return Number(s.numValue);
+      if (s.value != null) {
+        const n = Number(s.value);
+        return Number.isFinite(n) ? n : null;
+      }
+      return null;
+    };
+
+    const targetApy = getNum('metavault.apy.target') ?? getNum('MetaVault Net APY Target'); // decimal
+    const targetPctRaw = getNum('Yield Efficiency Target'); // e.g., 0.97 => 97%
+    const benchmarkPctRaw = getNum('Yield Efficiency Benchmark') ?? getNum('metavault.yield.benchmark_pct'); // e.g., 0.95 => 95%
+    const targetPct = targetPctRaw != null ? (targetPctRaw <= 1 ? targetPctRaw * 100 : targetPctRaw) : null;
+    const benchmarkPct = benchmarkPctRaw != null ? (benchmarkPctRaw <= 1 ? benchmarkPctRaw * 100 : benchmarkPctRaw) : null;
+
+    // Compute total AUM via maturities (same approach as Net APY calc)
+    const maturities = await this.prisma.maturitySnapshot.findMany({
+      where: { asset: { isRemoved: false } },
+      include: { asset: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    let totalValueUsd = 0;
+    for (const snap of maturities as any[]) {
+      const balNum = snap.balance != null ? Number(snap.balance as any) : 0;
+      const balance = Number.isFinite(balNum) ? balNum : 0;
+      const pools: any[] = Array.isArray((snap as any).pools) ? ((snap as any).pools as any[]) : [];
+      const p0 = pools[0] ?? null;
+      const ptPriceUsd = p0?.ptPrice?.usd != null ? Number(p0.ptPrice.usd) : null;
+      if (ptPriceUsd == null) continue;
+      const positionValue = (balance / 1e18) * ptPriceUsd;
+      if (!Number.isFinite(positionValue) || positionValue <= 0) continue;
+      totalValueUsd += positionValue;
+    }
+
+    // Realized Yield over lookback (sum of realizedUsd from harvest logs)
+    const harvestLogs = await this.getHarvestLogs(this.subtractDays(runAt, HARVEST_LOOKBACK_DAYS));
+    const realizedYieldUsd = harvestLogs.reduce((acc, log) => acc + (log.realizedUsd ?? 0), 0);
+
+    // Target Yield over same lookback
+    const targetYieldUsd = (Number.isFinite(totalValueUsd) && totalValueUsd > 0 && targetApy != null)
+      ? totalValueUsd * targetApy * (HARVEST_LOOKBACK_DAYS / 365)
+      : null;
+
+    // Current Value: Realized / Target × 100%
+    let currentValue: number | null = null;
+    if (targetYieldUsd != null && targetYieldUsd > 0) {
+      currentValue = (realizedYieldUsd / targetYieldUsd) * 100;
+    }
+
+    const vsTarget = currentValue != null && targetPct != null ? currentValue - targetPct : null;
+    const vsBenchmark = currentValue != null && benchmarkPct != null ? currentValue - benchmarkPct : null;
+    const status = vsTarget != null ? (vsTarget > 0 ? '✅' : '❌') : null;
+    const trend = '↗️';
+
+    await this.prisma.outputSnapshot.create({
+      data: {
+        outputMetricId: metric.id,
+        currentValue: currentValue != null ? new Prisma.Decimal(currentValue) : null,
+        target: targetPct != null ? new Prisma.Decimal(targetPct) : null,
+        benchmark: benchmarkPct != null ? new Prisma.Decimal(benchmarkPct) : null,
+        vsTarget: vsTarget != null ? new Prisma.Decimal(vsTarget) : null,
+        vsBenchmark: vsBenchmark != null ? new Prisma.Decimal(vsBenchmark) : null,
+        status,
+        trend,
+        createdAt: runAt,
+      },
+    });
+
+    this.logger.log('createOutputSnapshot1: Yield Efficiency snapshot created.');
+  }
+
+  async processHarvestFrequency(runAt, metric) {
+    // Load targets/benchmarks for harvest interval (days)
+    const keys = [
+      'Harvest Frequency Target',
+      'Harvest Frequency Benchmark',
+      'harvest.interval.target_days',
+    ];
+    const rows = await this.prisma.setting.findMany({ where: { key: { in: keys } } });
+    const smap = new Map(rows.map((s) => [s.key, s] as const));
+    const getNum = (k: string): number | null => {
+      const s: any = smap.get(k);
+      if (!s) return null;
+      if (s.numValue != null) return Number(s.numValue);
+      if (s.value != null) {
+        const n = Number(s.value);
+        return Number.isFinite(n) ? n : null;
+      }
+      return null;
+    };
+
+    const target = getNum('harvest.interval.target_days') ?? getNum('Harvest Frequency Target');
+    const benchmark = getNum('Harvest Frequency Benchmark');
+
+    // Fetch harvest logs and compute average days between harvests.
+    // If per-pool identifiers are present, compute per-pool averages and then overall average.
+    const since = this.subtractDays(runAt, 120);
+    const logs = await this.getHarvestLogs(since);
+
+    let currentValue: number | null = null;
+    if (logs.length >= 2) {
+      type Key = string;
+      const groups = new Map<Key, { timestamp: Date }[]>();
+      for (const l of logs) {
+        const key = (l as any).poolKey ?? (l as any).poolId ?? 'all';
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)!.push({ timestamp: l.timestamp });
+      }
+
+      const perGroup: number[] = [];
+      for (const [, arr] of groups) {
+        const v = calcHarvestFrequency(arr);
+        if (v != null && Number.isFinite(v)) perGroup.push(v);
+      }
+
+      if (perGroup.length) {
+        currentValue = perGroup.reduce((a, b) => a + b, 0) / perGroup.length;
+      }
+    }
+
+    const vsTarget = currentValue != null && target != null ? currentValue - target : null;
+    const vsBenchmark = currentValue != null && benchmark != null ? currentValue - benchmark : null;
+    const status = vsTarget != null ? (vsTarget <= 0 ? '✅' : '❌') : null; // lower is better for days between
+    const trend = '↗️';
+
+    await this.prisma.outputSnapshot.create({
+      data: {
+        outputMetricId: metric.id,
+        currentValue: currentValue != null ? new Prisma.Decimal(currentValue) : null,
+        target: target != null ? new Prisma.Decimal(target) : null,
+        benchmark: benchmark != null ? new Prisma.Decimal(benchmark) : null,
+        vsTarget: vsTarget != null ? new Prisma.Decimal(vsTarget) : null,
+        vsBenchmark: vsBenchmark != null ? new Prisma.Decimal(vsBenchmark) : null,
+        status,
+        trend,
+        createdAt: runAt,
+      },
+    });
+
+    this.logger.log('createOutputSnapshot1: Harvest Frequency snapshot created.');
+  }
+
+  async processGasEfficiency(runAt, metric) {
+    // Settings for cost/yield ratio (lower is better)
+    const keys = [
+      'Gas Efficiency Target',
+      'Gas Efficiency Benchmark',
+      'gas.efficiency.min_ratio',
+    ];
+    const rows = await this.prisma.setting.findMany({ where: { key: { in: keys } } });
+    const smap = new Map(rows.map((s) => [s.key, s] as const));
+    const getNum = (k: string): number | null => {
+      const s: any = smap.get(k);
+      if (!s) return null;
+      if (s.numValue != null) return Number(s.numValue);
+      if (s.value != null) {
+        const n = Number(s.value);
+        return Number.isFinite(n) ? n : null;
+      }
+      return null;
+    };
+
+    const target = getNum('Gas Efficiency Target') ?? getNum('gas.efficiency.min_ratio');
+    const benchmark = getNum('Gas Efficiency Benchmark');
+
+    // Aggregate realized yield and gas cost from logs (and oracle-estimated costs)
+    const harvestLogs = await this.getHarvestLogs(this.subtractDays(runAt, HARVEST_LOOKBACK_DAYS));
+    const totalYieldUsd = harvestLogs.reduce((acc, l) => acc + (l.realizedUsd ?? 0), 0);
+    const totalGasCostUsd = harvestLogs.reduce((acc, l) => acc + (l.gasCostUsd ?? (this.estimateGasCostUsd(l) ?? 0)), 0);
+
+    // Current Value: Total Gas Cost / Total Yield Generated
+    const currentValue = totalYieldUsd > 0 && Number.isFinite(totalGasCostUsd)
+      ? totalGasCostUsd / totalYieldUsd
+      : null;
+
+    const vsTarget = currentValue != null && target != null ? currentValue - target : null;
+    const vsBenchmark = currentValue != null && benchmark != null ? currentValue - benchmark : null;
+    const status = (vsTarget != null) ? (vsTarget <= 0 ? '✅' : '❌') : null; // lower is better
+    const trend = '↗️';
+
+    await this.prisma.outputSnapshot.create({
+      data: {
+        outputMetricId: metric.id,
+        currentValue: currentValue != null ? new Prisma.Decimal(currentValue) : null,
+        target: target != null ? new Prisma.Decimal(target) : null,
+        benchmark: benchmark != null ? new Prisma.Decimal(benchmark) : null,
+        vsTarget: vsTarget != null ? new Prisma.Decimal(vsTarget) : null,
+        vsBenchmark: vsBenchmark != null ? new Prisma.Decimal(vsBenchmark) : null,
+        status,
+        trend,
+        createdAt: runAt,
+      },
+    });
+
+    this.logger.log('createOutputSnapshot1: Gas Efficiency snapshot created.');
+  }
+
+  async processSlippageControl(runAt, metric) {
+    // Load targets/benchmarks for slippage control
+    const keys = [
+      'Slippage Control Target',
+      'Slippage Control Benchmark',
+      'slippage.max_pct',
+    ];
+    const rows = await this.prisma.setting.findMany({ where: { key: { in: keys } } });
+    const smap = new Map(rows.map((s) => [s.key, s] as const));
+    const getNum = (k: string): number | null => {
+      const s: any = smap.get(k);
+      if (!s) return null;
+      if (s.numValue != null) return Number(s.numValue);
+      if (s.value != null) {
+        const n = Number(s.value);
+        return Number.isFinite(n) ? n : null;
+      }
+      return null;
+    };
+
+    const target = getNum('Slippage Control Target') ?? getNum('slippage.max_pct');
+    const benchmark = getNum('Slippage Control Benchmark');
+
+    // Pull recent trades and compute average (Execution Price - Quote Price)
+    const since = this.subtractDays(runAt, TRADE_LOOKBACK_DAYS);
+    const trades = await this.getTradeExecutionLogs(since);
+    let currentValue: number | null = null;
+    if (trades.length) {
+      const diffs: number[] = [];
+      for (const t of trades) {
+        if (!Number.isFinite(t.executionPrice) || !Number.isFinite(t.quotePrice)) continue;
+        diffs.push(t.executionPrice - t.quotePrice);
+      }
+      if (diffs.length) {
+        const total = diffs.reduce((a, b) => a + b, 0);
+        currentValue = total / diffs.length;
+      }
+    }
+
+    const vsTarget = currentValue != null && target != null ? currentValue - target : null;
+    const vsBenchmark = currentValue != null && benchmark != null ? currentValue - benchmark : null;
+    const status = (vsTarget != null) ? (vsTarget <= 0 ? '✅' : '❌') : null; // lower is better
+    const trend = '↗️';
+
+    await this.prisma.outputSnapshot.create({
+      data: {
+        outputMetricId: metric.id,
+        currentValue: currentValue != null ? new Prisma.Decimal(currentValue) : null,
+        target: target != null ? new Prisma.Decimal(target) : null,
+        benchmark: benchmark != null ? new Prisma.Decimal(benchmark) : null,
+        vsTarget: vsTarget != null ? new Prisma.Decimal(vsTarget) : null,
+        vsBenchmark: vsBenchmark != null ? new Prisma.Decimal(vsBenchmark) : null,
+        status,
+        trend,
+        createdAt: runAt,
+      },
+    });
+
+    this.logger.log('createOutputSnapshot1: Slippage Control snapshot created.');
   }
 }

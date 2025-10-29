@@ -186,6 +186,9 @@ for (const s of settings) {
 
   // Additional settings: Targets and Benchmarks (as requested)
   const additionalSettings = [
+    // Risk-free rate (annual, decimal). Also add human-readable key.
+    { key: 'riskfree.rate',                  value: null, numValue: '0.05', notes: 'Annual risk-free rate (decimal, 5%)' },
+    { key: 'Risk-Free Rate',                 value: null, numValue: '0.05', notes: 'Annual risk-free rate (decimal, 5%)' },
     { key: 'MetaVault Net APY Target',       value: null, numValue: '0.24', notes: null },
     { key: 'Alpha Generation Target',        value: null, numValue: '0.04', notes: null },
     { key: 'Sharpe Ratio Target',            value: null, numValue: '3',    notes: null },
