@@ -2,23 +2,9 @@ import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { DiscoveryMaturityService } from './discovery.maturity.service';
 import { PrismaService } from '../prisma/prisma.service';
 
-type MetricDef = { key: string; title: string };
-
 @Injectable()
 export class DoscoveryInputService {
   private readonly logger = new Logger(DoscoveryInputService.name);
-
-  // Metrics catalog
-  readonly metrics: MetricDef[] = [
-    { key: 'apy', title: 'APY' },
-    { key: 'peg_stability', title: 'Peg Stability' },
-    { key: 'liquidity_depth', title: 'Liquidity Depth' },
-    { key: 'gas_price', title: 'Gas Price (Gwei)' },
-    { key: 'pt_price', title: 'PT-ASSET Price' },
-    { key: 'pt_fair_value', title: 'PT-ASSET Fair Value' },
-    { key: 'yt_price', title: 'YT-ASSET Price' },
-    { key: 'yt_accumulated', title: 'YT ASSET Accumulated' },
-  ];
 
   constructor(
     @Inject(forwardRef(() => DiscoveryMaturityService))
@@ -38,6 +24,8 @@ export class DoscoveryInputService {
       await this.calculateGasPrice(m);
       await this.calculatePtPrice(m);
       await this.calculatePtFairValue(m, apy);
+      await this.calculateYtPrice(m);
+      await this.calculateYtAccumulated(m);
     }
 
     
@@ -265,6 +253,164 @@ export class DoscoveryInputService {
 
   private async calculateGasPrice(_maturityItem: any) {}
 
+  // YT Price = pools[0].ytPrice.underlying
+  private async calculateYtPrice(maturityItem: any) {
+    const payload = maturityItem?.maturity?.payload ?? null;
+    const pools: any[] = Array.isArray(payload?.pools) ? payload.pools : [];
+    if (!pools.length) return null;
+
+    const ytPrice = Number(pools[0]?.ytPrice?.underlying) || 0;
+
+    let previousValue = 0;
+    try {
+      const assetId = maturityItem?.maturity?.assetId;
+      const metricTitle = 'yt_price';
+      if (assetId) {
+        const secondLatestMaturity = await this.prisma.maturitySnapshot.findMany({
+          where: { assetId },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true },
+          skip: 1,
+          take: 1,
+        });
+        const secondLatestId = secondLatestMaturity[0]?.id;
+        if (secondLatestId) {
+          const prev = await this.prisma.inputSnapshot.findFirst({
+            where: { metric: metricTitle, maturitySnapshotId: secondLatestId },
+            orderBy: { createdAt: 'desc' },
+            select: { currentValue: true },
+          });
+          if (prev?.currentValue != null) {
+            previousValue = Number((prev as any).currentValue);
+          }
+        }
+      }
+    } catch {}
+
+    const changePercentage = (ytPrice - previousValue) / previousValue;
+    const threshold = 0.05;
+    const status = Math.abs(changePercentage) > threshold ? '\u26A0\uFE0F' : '\u2705';
+    const alert = status === '\u26A0\uFE0F' ? 1 : 0;
+    const source = 'Spectra API';
+    const note = null;
+    const metric = 'yt_price';
+
+    try {
+      const maturitySnapshotId = maturityItem?.maturity?.id;
+      if (maturitySnapshotId && this.prisma) {
+        await this.prisma.inputSnapshot.create({
+          data: {
+            maturitySnapshotId,
+            metric,
+            currentValue: ytPrice,
+            previousValue,
+            changePercentage,
+            threshold,
+            status,
+            alert: Boolean(alert),
+            source,
+            note,
+          },
+        });
+      }
+    } catch (err) {
+      this.logger.error('Failed to insert InputSnapshot (YT Price)');
+    }
+  }
+
+  // YT Accumulated (USD) = (balance * underlying.price.usd * impliedApy * days_since_harvest / 365) / 1e18
+  /* pools[0].impliedApy": 11.195216086427306,
+"balance": "352881357824430031859534",
+"underlying.price.usd": 0.9998990348568948
+🧮 Conceptual calculation
+Accumulated (USD)=Position Value×Implied APY×Days Since Harvest​/365
+here
+
+Position Value ≈ balance × underlying.price.usd / 1e18
+→ ≈ 352,881 × 0.9999 = $352,880
+
+Implied APY = 11.195 %
+
+Days Since Harvest = assume 30
+So:
+
+YT-3M Accumulated = ( balance × underlying.price.usd × impliedApy × days_since_harvest / 365 ) / 1e18 */
+  private async calculateYtAccumulated(maturityItem: any) {
+    const payload = maturityItem?.maturity?.payload ?? null;
+    const pools: any[] = Array.isArray(payload?.pools) ? payload.pools : [];
+    if (!pools.length) return null;
+
+    const balanceStr = String(payload?.balance ?? '0');
+    const usdPrice = Number(payload?.underlying?.price?.usd);
+    const impliedApyRaw = Number(pools[0]?.impliedApy);
+    const daysSinceHarvest = 30; // assumption
+
+    const impliedApy = Number.isFinite(impliedApyRaw)
+      ? (impliedApyRaw > 1 ? impliedApyRaw / 100 : impliedApyRaw)
+      : 0;
+
+    const balanceNormalized = Number(balanceStr) / 1e18;
+    const positionValueUsd = (Number.isFinite(balanceNormalized) ? balanceNormalized : 0) * (Number.isFinite(usdPrice) ? usdPrice : 0);
+
+    const ytAccumulated = positionValueUsd * impliedApy * (daysSinceHarvest / 365);
+
+    let previousValue = 0;
+    try {
+      const assetId = maturityItem?.maturity?.assetId;
+      const metricTitle = 'yt_accumulated';
+      if (assetId) {
+        const secondLatestMaturity = await this.prisma.maturitySnapshot.findMany({
+          where: { assetId },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true },
+          skip: 1,
+          take: 1,
+        });
+        const secondLatestId = secondLatestMaturity[0]?.id;
+        if (secondLatestId) {
+          const prev = await this.prisma.inputSnapshot.findFirst({
+            where: { metric: metricTitle, maturitySnapshotId: secondLatestId },
+            orderBy: { createdAt: 'desc' },
+            select: { currentValue: true },
+          });
+          if (prev?.currentValue != null) {
+            previousValue = Number((prev as any).currentValue);
+          }
+        }
+      }
+    } catch {}
+
+    const changePercentage = (ytAccumulated - previousValue) / previousValue;
+    const threshold = 500;
+    const status = ytAccumulated > threshold ? '\uD83C\uDFAF' : '\u2705';
+    const alert = ytAccumulated > threshold ? 1 : 0;
+    const source = 'Calculated';
+    const note = null;
+    const metric = 'yt_accumulated';
+
+    try {
+      const maturitySnapshotId = maturityItem?.maturity?.id;
+      if (maturitySnapshotId && this.prisma) {
+        await this.prisma.inputSnapshot.create({
+          data: {
+            maturitySnapshotId,
+            metric,
+            currentValue: ytAccumulated,
+            previousValue,
+            changePercentage,
+            threshold,
+            status,
+            alert: Boolean(alert),
+            source,
+            note,
+          },
+        });
+      }
+    } catch (err) {
+      this.logger.error('Failed to insert InputSnapshot (YT Accumulated)');
+    }
+  }
+
   // PT Price = pools[0].ptPrice.underlying
   private async calculatePtPrice(maturityItem: any) {
     const payload = maturityItem?.maturity?.payload ?? null;
@@ -363,7 +509,7 @@ export class DoscoveryInputService {
     } catch {}
 
     const changePercentage = (ptFairValue - previousValue) / previousValue;
-    const source = 'Spectra API';
+    const source = 'Calculated';
     const note = null;
     const metric = 'pt_fair_value';
 
