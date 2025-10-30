@@ -15,7 +15,7 @@ export class DoscoveryInputService {
   async calc() {
     // Fetch latest maturity snapshots per asset
     const maturities = await this.maturity.getLatestMaturities();
-// console.log((maturities));
+
     for (const m of maturities) {
       console.log((m));
       const apy = await this.calculateApy(m);
@@ -27,6 +27,9 @@ export class DoscoveryInputService {
       await this.calculateYtPrice(m);
       await this.calculateYtAccumulated(m);
     }
+
+    const ms = await this.maturity.getLatestMaturities();
+    console.log((ms));
 
     
     return maturities;

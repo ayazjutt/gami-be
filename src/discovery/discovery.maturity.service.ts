@@ -57,9 +57,6 @@ export class DiscoveryMaturityService {
 
     // process snapshot metrics
     await this.inputs.calc();
-
-    const m = await this.getLatestMaturities()
-    console.log((m));
   }
 
    async processAsset(
