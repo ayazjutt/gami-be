@@ -3,6 +3,8 @@ import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { DoscoveryInputService } from './doscovery.input.service';
+import { DiscoveryPtTrackingService } from './discovery.pt-tracking.service';
+import { DiscoveryYtTrackingService } from './discovery.yt-tracking.service';
 
 type MetricDef = { key: string; title: string };
 type AssetFound = {
@@ -44,6 +46,10 @@ export class DiscoveryMaturityService {
     private readonly prisma: PrismaService,
     @Inject(forwardRef(() => DoscoveryInputService))
     private readonly inputs: DoscoveryInputService,
+    @Inject(forwardRef(() => DiscoveryPtTrackingService))
+    private readonly ptTracking: DiscoveryPtTrackingService,
+    @Inject(forwardRef(() => DiscoveryYtTrackingService))
+    private readonly ytTracking: DiscoveryYtTrackingService,
   ) {}
 
   async runOnce(): Promise<void> {
@@ -57,6 +63,13 @@ export class DiscoveryMaturityService {
 
     // process snapshot metrics
     await this.inputs.calc();
+    // process PT tracking metrics (same pattern as inputs)
+    await this.ptTracking.calc();
+    // process YT tracking metrics
+    await this.ytTracking.calc();
+
+    const maturities = await this.getLatestMaturities();
+    console.log(maturities[0].maturity);
   }
 
    async processAsset(
@@ -164,6 +177,8 @@ export class DiscoveryMaturityService {
           name: r.name,
           payload: r.payload,
           inputSnapshot: await this.getInputSnapshotsForMaturity(r.id),
+          ptTracking: await this.getPtTrackingSnapshotsForMaturity(r.id),
+          ytTracking: await this.getYtTrackingSnapshotsForMaturity(r.id),
         },
       }))
     );
@@ -174,6 +189,20 @@ export class DiscoveryMaturityService {
     return this.prisma.inputSnapshot.findMany({
       where: { maturitySnapshotId },
       orderBy: [{ metric: 'asc' }, { createdAt: 'desc' }],
+    });
+  }
+
+  private async getPtTrackingSnapshotsForMaturity(maturitySnapshotId: number) {
+    return (this.prisma as any).ptTrackingSnapshot.findMany({
+      where: { maturitySnapshotId },
+      orderBy: [{ createdAt: 'desc' }],
+    });
+  }
+
+  private async getYtTrackingSnapshotsForMaturity(maturitySnapshotId: number) {
+    return (this.prisma as any).ytTrackingSnapshot.findMany({
+      where: { maturitySnapshotId },
+      orderBy: [{ createdAt: 'desc' }],
     });
   }
 

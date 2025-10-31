@@ -59,6 +59,10 @@ model MaturitySnapshot {
 
   // Back-reference for InputSnapshot relation
   inputSnapshots    InputSnapshot[]
+  // Back-reference for PtTrackingSnapshot relation (one-to-one)
+  ptTrackingSnapshot PtTrackingSnapshot?
+  // Back-reference for YtTrackingSnapshot relation (one-to-one)
+  ytTrackingSnapshot YtTrackingSnapshot?
 
   @@index([assetId, maturityTs])
 }
@@ -82,6 +86,79 @@ model InputSnapshot {
   createdAt           DateTime          @default(now())
 
   @@index([maturitySnapshotId, metric])
+}
+
+// Enums for PT tracking
+enum ArbitrageSignal {
+  HOLD
+  BUY
+}
+
+enum ArbitrageAction {
+  HOLD
+  BUY
+}
+
+// PT tracking table for per-maturity metrics
+model PtTrackingSnapshot {
+  id                  Int               @id @default(autoincrement())
+  maturitySnapshotId  Int
+  maturitySnapshot    MaturitySnapshot  @relation(fields: [maturitySnapshotId], references: [id], onDelete: Cascade)
+
+  marketPrice         Decimal?          @db.Decimal(38, 18)
+  fairValue           Decimal?          @db.Decimal(38, 18)
+  mispricingPct       Decimal?          @db.Decimal(38, 18)
+  impliedApy          Decimal?          @db.Decimal(38, 18)
+  liquidityScore      Decimal?          @db.Decimal(38, 18)
+  bidAskSpread        Decimal?          @db.Decimal(38, 18)
+  volume24h           Decimal?          @db.Decimal(38, 18)
+  arbitrageSignal     ArbitrageSignal?
+  action              ArbitrageAction?
+
+  createdAt           DateTime          @default(now())
+
+  @@unique([maturitySnapshotId])
+  @@index([maturitySnapshotId])
+}
+
+// Enums for YT tracking
+enum ClaimSignal {
+  CLAIM
+  WAIT
+}
+
+enum ClaimAction {
+  CLAIM
+  WAIT
+}
+
+// Daily yield estimation for YT harvesting
+enum DailyYieldEst {
+  HARVEST
+  WAIT
+}
+
+// YT tracking table for per-maturity metrics
+model YtTrackingSnapshot {
+  id                  Int               @id @default(autoincrement())
+  maturitySnapshotId  Int               @unique
+  maturitySnapshot    MaturitySnapshot  @relation(fields: [maturitySnapshotId], references: [id], onDelete: Cascade)
+
+  // Columns mapped to dashboard labels
+  marketPrice         Decimal?          @db.Decimal(38, 18) // Market Price
+  impliedApy          Decimal?          @db.Decimal(38, 18) // Implied APY (as fraction, e.g. 0.12)
+  accumulatedYield    Decimal?          @db.Decimal(38, 18) // Accumulated Yield (USD)
+  harvestThreshold    Decimal?          @db.Decimal(38, 18) // Harvest Threshold (USD)
+  daysSinceHarvest    Int?              // Days Since Harvest
+  dailyYieldEst       DailyYieldEst?    // Daily Yield Est (HARVEST/WAIT)
+  harvestSignal       ClaimSignal?      // Harvest Signal (CLAIM/WAIT)
+  gasCostEst          Decimal?          @db.Decimal(38, 18) // Gas Cost Est (USD)
+  netValue            Decimal?          @db.Decimal(38, 18) // Net Value (USD)
+  action              ClaimAction?      // Action (CLAIM/WAIT)
+
+  createdAt           DateTime          @default(now())
+
+  @@index([maturitySnapshotId])
 }
 
 model Setting {

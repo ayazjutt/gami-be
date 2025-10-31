@@ -17,7 +17,6 @@ export class DoscoveryInputService {
     const maturities = await this.maturity.getLatestMaturities();
 
     for (const m of maturities) {
-      console.log((m));
       const apy = await this.calculateApy(m);
       await this.calculatePegStability(m);
       await this.calculateLiquidityDepth(m);
@@ -28,8 +27,8 @@ export class DoscoveryInputService {
       await this.calculateYtAccumulated(m);
     }
 
-    const ms = await this.maturity.getLatestMaturities();
-    console.log((ms));
+    // const ms = await this.maturity.getLatestMaturities();
+    // console.log((ms));
 
     
     return maturities;
@@ -79,7 +78,7 @@ export class DoscoveryInputService {
           take: 1,
         });
         const secondLatestId = secondLatestMaturity[0]?.id;
-        console.log(`secondLatestId:: ${secondLatestId}`)
+
         if (secondLatestId) {
           const prev = await this.prisma.inputSnapshot.findFirst({
             where: { metric: metricTitle, maturitySnapshotId: secondLatestId },
@@ -122,7 +121,7 @@ export class DoscoveryInputService {
     } catch (err) {
       this.logger.error('Failed to insert InputSnapshot');
     }
-    console.log({ apy, previousValue, changePercentage, threshold, status, alert });
+
     return apy;
   }
 
