@@ -29,6 +29,16 @@ model Asset {
   decimals   Int
   isRemoved  Boolean  @default(false)
 
+  // Optional thresholds for input metrics
+  apyThreshold                 Decimal? @db.Decimal(38, 18)
+  pegStabilityThreshold        Decimal? @db.Decimal(38, 18)
+  liquidityDepthThreshold      Decimal? @db.Decimal(38, 18)
+  gasPriceGweiThreshold        Decimal? @db.Decimal(38, 18)
+  ptPriceThreshold             Decimal? @db.Decimal(38, 18)
+  ytPriceThreshold             Decimal? @db.Decimal(38, 18)
+  ptFairValueThreshold         Decimal? @db.Decimal(38, 18)
+  ytAccumulatedThreshold       Decimal? @db.Decimal(38, 18)
+
   maturitySnapshots MaturitySnapshot[]
 
   @@unique([networkId, address])

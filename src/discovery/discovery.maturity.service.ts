@@ -53,13 +53,14 @@ export class DiscoveryMaturityService {
   ) {}
 
   async runOnce(): Promise<void> {
-    for (const asset of this.assetsFound) {
-      try {
-        await this.processAsset(asset);
-      } catch (err: any) {
-        this.logger.error(`âŒ ${asset.network}:${asset.address} â†’ ${err?.message ?? err}`);
-      }
-    }
+    await await this.processMetavault();
+    // for (const asset of this.assetsFound) {
+    //   try {
+    //     await this.processAsset(asset);
+    //   } catch (err: any) {
+    //     this.logger.error(`âŒ ${asset.network}:${asset.address} â†’ ${err?.message ?? err}`);
+    //   }
+    // }
 
     // process snapshot metrics
     await this.inputs.calc();
@@ -70,6 +71,67 @@ export class DiscoveryMaturityService {
 
     const maturities = await this.getLatestMaturities();
     console.log(maturities[0].maturity);
+  }
+
+  async processMetavault(): Promise<void> {
+    const network = await this.prisma.network.upsert({
+      where: { slug: 'base' },
+      update: { name: 'Base', chainId: 8453 },
+      create: { name: 'Base', slug: 'base', chainId: 8453 },
+    });
+
+    const url = `${this.baseUrl}/base/portfolio/0x23e0276fd738fa07284b218260d9f4113d3840b7`;
+    this.logger.log(`Fetching ${url}`);
+    const { data } = await firstValueFrom(this.http.get<PortfolioItem[]>(url));
+    if (!Array.isArray(data)) return;
+
+    const seen = new Set<string>();
+    for (const item of data) {
+      const ptAddress = lcStrict(item.address, 'portfolioItem.address');
+      seen.add(ptAddress);
+
+      const asset = await this.prisma.asset.upsert({
+        where: { networkId_address: { networkId: network.id, address: ptAddress } },
+        update: {
+          name: item.name,
+          symbol: item.ibt?.symbol ?? item.symbol,
+          decimals: item.decimals ?? 18,
+          isRemoved: false,
+        },
+        create: {
+          networkId: network.id,
+          address: ptAddress,
+          name: item.name,
+          symbol: item.ibt?.symbol ?? item.symbol,
+          decimals: item.decimals ?? 18,
+          isRemoved: false,
+        },
+      });
+
+      await this.prisma.maturitySnapshot.create({
+        data: {
+          assetId: asset.id,
+          maturityTs: unixToDate(item.maturity),
+          source: 'Spectra Portfolio API',
+          name: item.name,
+          symbol: item.ibt?.symbol ?? item.symbol,
+          ibtAddress: lc(item.ibt?.address),
+          ytAddress: lc(item.yt?.address),
+          ptAddress,
+          maturityCreatedAt: item.createdAt ? unixToDate(item.createdAt) : null,
+          balance: item.balance != null ? String(item.balance) : null,
+          pools: (item.pools ?? []) as any,
+          payload: (item as any),
+        },
+      });
+    }
+
+    if (seen.size > 0) {
+      await this.prisma.asset.updateMany({
+        where: { networkId: network.id, address: { notIn: Array.from(seen) } },
+        data: { isRemoved: true },
+      });
+    }
   }
 
    async processAsset(

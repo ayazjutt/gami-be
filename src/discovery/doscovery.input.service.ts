@@ -92,9 +92,23 @@ export class DoscoveryInputService {
       }
     } catch {}
     const changePercentage = (apy - previousValue) / previousValue;
-    const threshold = 0.005;
-    const status = Math.abs(changePercentage) > threshold ? '\u26A0\uFE0F' : '\u2705';
-    const alert = status === '\u26A0\uFE0F' ? 1 : 0;
+    // Fetch threshold from Asset.apyThreshold; if null, keep it null
+    let threshold: number | null = null;
+    try {
+      const assetId = maturityItem?.maturity?.assetId;
+      if (assetId) {
+        const asset = await this.prisma.asset.findUnique({
+          where: { id: assetId },
+          select: { apyThreshold: true },
+        });
+        if (asset?.apyThreshold != null) {
+          const t = Number(asset.apyThreshold as any);
+          threshold = Number.isFinite(t) ? t : null;
+        }
+      }
+    } catch {}
+    const status = threshold == null ? null : (Math.abs(changePercentage) > threshold ? '\u26A0\uFE0F' : '\u2705');
+    const alert = status == null ? null : status === '\u26A0\uFE0F';
     const source = 'Spectra API';
     const note = null;
     const metric = 'apy';
@@ -112,7 +126,7 @@ export class DoscoveryInputService {
             changePercentage,
             threshold,
             status,
-            alert: Boolean(alert),
+            alert,
             source,
             note,
           },
@@ -158,9 +172,23 @@ export class DoscoveryInputService {
     } catch {}
 
     const changePercentage = (peg - previousValue) / previousValue;
-    const threshold = 0.005;
-    const status = Math.abs(changePercentage) > threshold ? '\u26A0\uFE0F' : '\u2705';
-    const alert = status === '\u26A0\uFE0F' ? 1 : 0;
+    // Fetch threshold from Asset.pegStabilityThreshold; if null, keep it null
+    let threshold: number | null = null;
+    try {
+      const assetId = maturityItem?.maturity?.assetId;
+      if (assetId) {
+        const asset = await this.prisma.asset.findUnique({
+          where: { id: assetId },
+          select: { pegStabilityThreshold: true },
+        });
+        if (asset?.pegStabilityThreshold != null) {
+          const t = Number((asset as any).pegStabilityThreshold);
+          threshold = Number.isFinite(t) ? t : null;
+        }
+      }
+    } catch {}
+    const status = threshold == null ? null : (Math.abs(changePercentage) > threshold ? '\u26A0\uFE0F' : '\u2705');
+    const alert = status == null ? null : status === '\u26A0\uFE0F';
     const source = 'Spectra API';
     const note = null;
     const metric = 'peg_stability';
@@ -177,7 +205,7 @@ export class DoscoveryInputService {
             changePercentage,
             threshold,
             status,
-            alert: Boolean(alert),
+            alert,
             source,
             note,
           },
@@ -223,9 +251,23 @@ export class DoscoveryInputService {
     } catch {}
 
     const changePercentage = (liquidityDepth - previousValue) / previousValue;
-    const threshold = 0.05;
-    const status = Math.abs(changePercentage) > threshold ? '\u26A0\uFE0F' : '\u2705';
-    const alert = status === '\u26A0\uFE0F' ? 1 : 0;
+    // Fetch threshold from Asset.liquidityDepthThreshold; if null, keep it null
+    let threshold: number | null = null;
+    try {
+      const assetId = maturityItem?.maturity?.assetId;
+      if (assetId) {
+        const asset = await this.prisma.asset.findUnique({
+          where: { id: assetId },
+          select: { liquidityDepthThreshold: true },
+        });
+        if (asset?.liquidityDepthThreshold != null) {
+          const t = Number((asset as any).liquidityDepthThreshold);
+          threshold = Number.isFinite(t) ? t : null;
+        }
+      }
+    } catch {}
+    const status = threshold == null ? null : (Math.abs(changePercentage) > threshold ? '\u26A0\uFE0F' : '\u2705');
+    const alert = status == null ? null : status === '\u26A0\uFE0F';
     const source = 'Spectra API';
     const note = null;
     const metric = 'liquidity_depth';
@@ -253,7 +295,9 @@ export class DoscoveryInputService {
     }
   }
 
-  private async calculateGasPrice(_maturityItem: any) {}
+  private async calculateGasPrice(_maturityItem: any) {
+    // todo: 
+  }
 
   // YT Price = pools[0].ytPrice.underlying
   private async calculateYtPrice(maturityItem: any) {
@@ -383,9 +427,23 @@ YT-3M Accumulated = ( balance × underlying.price.usd × impliedApy × days_sinc
     } catch {}
 
     const changePercentage = (ytAccumulated - previousValue) / previousValue;
-    const threshold = 500;
-    const status = ytAccumulated > threshold ? '\uD83C\uDFAF' : '\u2705';
-    const alert = ytAccumulated > threshold ? 1 : 0;
+    // Fetch threshold from Asset.ytAccumulatedThreshold; if null, keep it null
+    let threshold: number | null = null;
+    try {
+      const assetId = maturityItem?.maturity?.assetId;
+      if (assetId) {
+        const asset = await this.prisma.asset.findUnique({
+          where: { id: assetId },
+          select: { ytAccumulatedThreshold: true },
+        });
+        if (asset?.ytAccumulatedThreshold != null) {
+          const t = Number((asset as any).ytAccumulatedThreshold);
+          threshold = Number.isFinite(t) ? t : null;
+        }
+      }
+    } catch {}
+    const status = threshold == null ? null : (ytAccumulated > threshold ? '\uD83C\uDFAF' : '\u2705');
+    const alert = threshold == null ? null : ytAccumulated > threshold;
     const source = 'Calculated';
     const note = null;
     const metric = 'yt_accumulated';
@@ -448,9 +506,23 @@ YT-3M Accumulated = ( balance × underlying.price.usd × impliedApy × days_sinc
     } catch {}
 
     const changePercentage = (ptPrice - previousValue) / previousValue;
-    const threshold = 0.005;
-    const status = Math.abs(changePercentage) > threshold ? '\u26A0\uFE0F' : '\u2705';
-    const alert = status === '\u26A0\uFE0F' ? 1 : 0;
+    // Fetch threshold from Asset.ptPriceThreshold; if null, keep it null
+    let threshold: number | null = null;
+    try {
+      const assetId = maturityItem?.maturity?.assetId;
+      if (assetId) {
+        const asset = await this.prisma.asset.findUnique({
+          where: { id: assetId },
+          select: { ptPriceThreshold: true },
+        });
+        if (asset?.ptPriceThreshold != null) {
+          const t = Number((asset as any).ptPriceThreshold);
+          threshold = Number.isFinite(t) ? t : null;
+        }
+      }
+    } catch {}
+    const status = threshold == null ? null : (Math.abs(changePercentage) > threshold ? '\u26A0\uFE0F' : '\u2705');
+    const alert = status == null ? null : status === '\u26A0\uFE0F';
     const source = 'Spectra API';
     const note = null;
     const metric = 'pt_price';
