@@ -70,7 +70,7 @@ export class DiscoveryMaturityService {
     await this.ytTracking.calc();
 
     const maturities = await this.getLatestMaturities();
-    console.log(maturities[0].maturity);
+    // console.log(maturities[0].maturity);
   }
 
   async processMetavault(): Promise<void> {

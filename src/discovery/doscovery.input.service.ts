@@ -1,18 +1,32 @@
-import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef, HttpException, HttpStatus } from '@nestjs/common';
+import { HttpService } from '@nestjs/axios';
+import type { AxiosResponse } from 'axios';
 import { DiscoveryMaturityService } from './discovery.maturity.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { lastValueFrom } from 'rxjs';
 
 @Injectable()
 export class DoscoveryInputService {
   private readonly logger = new Logger(DoscoveryInputService.name);
+  private readonly INFURA_KEY = '96b3ed4cf8e640f2a23db8bc892325dc';
+  // private readonly URL = `https://gas.api.infura.io/v3/${this.INFURA_KEY}/networks/base/gas-prices`;
+
+private readonly GAS_API_URL =
+  'https://gas.api.infura.io/v3/96b3ed4cf8e640f2a23db8bc892325dc/networks/8453/suggestedGasFees';
 
   constructor(
     @Inject(forwardRef(() => DiscoveryMaturityService))
     private readonly maturity: DiscoveryMaturityService,
     private readonly prisma: PrismaService,
+    private readonly httpService: HttpService,
   ) {}
 
   async calc() {
+    // const lastHarvest = await this.getLastHarvestDate(
+    //   '0x23e0276fd738fa07284b218260d9f4113d3840b7',
+    // );
+    // console.log(lastHarvest);
+
     // Fetch latest maturity snapshots per asset
     const maturities = await this.maturity.getLatestMaturities();
 
@@ -20,7 +34,8 @@ export class DoscoveryInputService {
       const apy = await this.calculateApy(m);
       await this.calculatePegStability(m);
       await this.calculateLiquidityDepth(m);
-      await this.calculateGasPrice(m);
+      const gas = await this.calculateGasPrice(m);
+      console.log(gas)
       await this.calculatePtPrice(m);
       await this.calculatePtFairValue(m, apy);
       await this.calculateYtPrice(m);
@@ -296,8 +311,119 @@ export class DoscoveryInputService {
   }
 
   private async calculateGasPrice(_maturityItem: any) {
-    // todo: 
+    const gas = await this.getBaseGasPriceGwei(this.httpService)
+    
+    const metricTitle = 'gas_price';
+    const currentValue = Number(gas?.gasPriceGwei ?? 0);
+
+    let previousValue = 0;
+    try {
+      const assetId = _maturityItem?.maturity?.assetId;
+      if (assetId) {
+        const secondLatestMaturity = await this.prisma.maturitySnapshot.findMany({
+          where: { assetId },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true },
+          skip: 1,
+          take: 1,
+        });
+        const secondLatestId = secondLatestMaturity[0]?.id;
+        if (secondLatestId) {
+          const prev = await this.prisma.inputSnapshot.findFirst({
+            where: { metric: metricTitle, maturitySnapshotId: secondLatestId },
+            orderBy: { createdAt: 'desc' },
+            select: { currentValue: true },
+          });
+          if (prev?.currentValue != null) {
+            previousValue = Number((prev as any).currentValue);
+          }
+        }
+      }
+    } catch {}
+
+    const changePercentage = (currentValue - previousValue) / previousValue;
+
+    // Fetch threshold from Asset.gasPriceGweiThreshold; if null, keep it null
+    let threshold: number | null = null;
+    try {
+      const assetId = _maturityItem?.maturity?.assetId;
+      if (assetId) {
+        const asset = await this.prisma.asset.findUnique({
+          where: { id: assetId },
+          select: { gasPriceGweiThreshold: true },
+        });
+        if (asset?.gasPriceGweiThreshold != null) {
+          const t = Number((asset as any).gasPriceGweiThreshold);
+          threshold = Number.isFinite(t) ? t : null;
+        }
+      }
+    } catch {}
+
+    const status = threshold == null ? null : (currentValue > threshold ? '\u26A0\uFE0F' : '\u2705');
+    const alert = threshold == null ? null : currentValue > threshold;
+    const source = 'Infura eth_gasPrice';
+    const note = null;
+
+    try {
+      const maturitySnapshotId = _maturityItem?.maturity?.id;
+      if (maturitySnapshotId && this.prisma) {
+        await this.prisma.inputSnapshot.create({
+          data: {
+            maturitySnapshotId,
+            metric: metricTitle,
+            currentValue,
+            previousValue,
+            changePercentage,
+            threshold,
+            status,
+            alert: Boolean(alert),
+            source,
+            note,
+          },
+        });
+      }
+    } catch (err) {
+      this.logger.error('Failed to insert InputSnapshot (Gas Price)');
+    }
+    return gas;
   }
+
+  private async getBaseGasPriceGwei(http: HttpService) {
+  const rpcUrl =
+    'https://mainnet.infura.io/v3/b4782483afbb4b5f8073848f49bf5d47';
+
+  const payload = {
+    jsonrpc: '2.0',
+    method: 'eth_gasPrice',
+    params: [],
+    id: 1,
+  };
+
+  const response = await lastValueFrom(
+    http.post(rpcUrl, payload, {
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  );
+
+  const resultHex: string | undefined = response?.data?.result;
+  if (!resultHex) {
+    throw new Error(
+      `Invalid eth_gasPrice response: ${JSON.stringify(response?.data)}`,
+    );
+  }
+
+  // resultHex is something like "0x3b9aca00"
+  const weiBigInt = BigInt(resultHex); // BigInt understands 0x...
+  // Use fractional conversion to avoid truncation: gwei = wei / 1e9
+  const gasPriceGwei = Number(weiBigInt) / 1e9;
+
+  return {
+    gasPriceWei: weiBigInt.toString(),
+    gasPriceGwei,
+    raw: response.data,
+  };
+  }
+  
 
   // YT Price = pools[0].ytPrice.underlying
   private async calculateYtPrice(maturityItem: any) {
@@ -609,5 +735,44 @@ YT-3M Accumulated = ( balance × underlying.price.usd × impliedApy × days_sinc
       this.logger.error('Failed to insert InputSnapshot (PT Fair Value)');
     }
   }
+
+  public async getLastHarvestDate(vaultAddress: string): Promise<Date | null> {
+      const query = `
+        query ($vault: String!) {
+          transactions(
+            first: 1
+            orderBy: timestamp
+            orderDirection: desc
+            where: {
+              vault: $vault
+              type_in: ["Harvest", "Claim", "YieldClaimed"]
+            }
+          ) {
+            timestamp
+          }
+        }
+      `;
+      const variables = { vault: vaultAddress.toLowerCase() };
+      const url =
+        'https://subgraph.satsuma-prod.com/93c7f5423489/perspective/spectra-base/api';
+      try {
+        const response: AxiosResponse<any> = await lastValueFrom(
+          this.httpService.post<any>(
+            url,
+            { query, variables },
+            { headers: { 'Content-Type': 'application/json' } },
+          ),
+        );
+        const ts = response.data?.data?.transactions?.[0]?.timestamp;
+        if (!ts) {
+          return null;
+        }
+        // Convert the Unix timestamp (seconds) to JavaScript Date (milliseconds)
+        return new Date(Number(ts) * 1000);
+      } catch (error) {
+        Logger.warn(`Failed to fetch last harvest date: ${error}`);
+        return null;
+      }
+    }
 
 }
