@@ -390,7 +390,7 @@ private readonly GAS_API_URL =
 
   private async getBaseGasPriceGwei(http: HttpService) {
   const rpcUrl =
-    'https://mainnet.infura.io/v3/b4782483afbb4b5f8073848f49bf5d47';
+    'https://base-mainnet.infura.io/v3/b4782483afbb4b5f8073848f49bf5d47';
 
   const payload = {
     jsonrpc: '2.0',
