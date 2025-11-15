@@ -39,6 +39,9 @@ model Asset {
   ptFairValueThreshold         Decimal? @db.Decimal(38, 18)
   ytAccumulatedThreshold       Decimal? @db.Decimal(38, 18)
 
+  // Target allocation for LP Pools (USD)
+  lpPoolTargetAllocation       Decimal? @db.Decimal(38, 18)
+
   maturitySnapshots MaturitySnapshot[]
 
   @@unique([networkId, address])
