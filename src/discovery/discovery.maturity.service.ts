@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { DoscoveryInputService } from './doscovery.input.service';
 import { DiscoveryPtTrackingService } from './discovery.pt-tracking.service';
 import { DiscoveryYtTrackingService } from './discovery.yt-tracking.service';
+import { DiscoveryLpPoolsService } from './discovery.lp-pools.service';
 
 type MetricDef = { key: string; title: string };
 type AssetFound = {
@@ -50,6 +51,8 @@ export class DiscoveryMaturityService {
     private readonly ptTracking: DiscoveryPtTrackingService,
     @Inject(forwardRef(() => DiscoveryYtTrackingService))
     private readonly ytTracking: DiscoveryYtTrackingService,
+    @Inject(forwardRef(() => DiscoveryLpPoolsService))
+    private readonly lpPools: DiscoveryLpPoolsService,
   ) {}
 
   async runOnce(): Promise<void> {
@@ -68,6 +71,8 @@ export class DiscoveryMaturityService {
     await this.ptTracking.calc();
     // process YT tracking metrics
     await this.ytTracking.calc();
+    // process LP Pools metrics
+    await this.lpPools.calc();
 
     const maturities = await this.getLatestMaturities();
     // console.log(maturities[0].maturity);

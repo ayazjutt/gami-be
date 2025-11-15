@@ -73,6 +73,8 @@ model MaturitySnapshot {
   ptTrackingSnapshot PtTrackingSnapshot?
   // Back-reference for YtTrackingSnapshot relation (one-to-one)
   ytTrackingSnapshot YtTrackingSnapshot?
+  // Back-reference for LpPoolSnapshot relation (one-to-one)
+  lpPoolSnapshot     LpPoolSnapshot?
 
   @@index([assetId, maturityTs])
 }
@@ -167,6 +169,35 @@ model YtTrackingSnapshot {
   action              ClaimAction?      // Action (CLAIM/WAIT)
 
   createdAt           DateTime          @default(now())
+
+  @@index([maturitySnapshotId])
+}
+
+// Enum for LP Pools rebalance signal
+enum RebalanceSignal {
+  REBALANCE
+  HOLD
+}
+
+// LP Pools metrics per maturity snapshot
+model LpPoolSnapshot {
+  id                  Int               @id @default(autoincrement())
+  maturitySnapshotId  Int               @unique
+  maturitySnapshot    MaturitySnapshot  @relation(fields: [maturitySnapshotId], references: [id], onDelete: Cascade)
+
+  // Dashboard columns
+  tvl               Decimal? @db.Decimal(38, 18) // TVL
+  apy               Decimal? @db.Decimal(38, 18) // APY (as fraction, e.g. 0.12)
+  volume24h         Decimal? @db.Decimal(38, 18) // 24h Volume
+  ourAllocation     Decimal? @db.Decimal(38, 18) // Our Allocation (USD)
+  ourSharePct       Decimal? @db.Decimal(38, 18) // Our Share % (0..1)
+  dailyFees         Decimal? @db.Decimal(38, 18) // Daily Fees (USD)
+  liquidityHealth   Decimal? @db.Decimal(38, 18) // Liquidity Health score
+  efficiencyScore   Decimal? @db.Decimal(38, 18) // Efficiency Score
+  targetAllocation  Decimal? @db.Decimal(38, 18) // Target Allocation (USD)
+  rebalanceSignal   RebalanceSignal?
+
+  createdAt         DateTime @default(now())
 
   @@index([maturitySnapshotId])
 }
