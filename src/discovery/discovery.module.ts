@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { DiscoveryPtTrackingService } from './discovery.pt-tracking.service';
 import { DiscoveryYtTrackingService } from './discovery.yt-tracking.service';
 import { DiscoveryLpPoolsService } from './discovery.lp-pools.service';
+import { DiscoveryOutputsService } from './discovery.outputs.service';
 
 @Module({
   imports: [HttpModule.register({ timeout: 20_000 })],
@@ -17,6 +18,7 @@ import { DiscoveryLpPoolsService } from './discovery.lp-pools.service';
     DiscoveryPtTrackingService,
     DiscoveryYtTrackingService,
     DiscoveryLpPoolsService,
+    DiscoveryOutputsService,
     PrismaService,
   ],
   exports: [
@@ -26,6 +28,7 @@ import { DiscoveryLpPoolsService } from './discovery.lp-pools.service';
     DiscoveryPtTrackingService,
     DiscoveryYtTrackingService,
     DiscoveryLpPoolsService,
+    DiscoveryOutputsService,
   ],
 })
 export class DiscoveryModule {}

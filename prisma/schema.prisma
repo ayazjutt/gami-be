@@ -82,6 +82,22 @@ model MaturitySnapshot {
   @@index([assetId, maturityTs])
 }
 
+// Global outputs snapshot for MetaVault-wide performance metrics (not per maturity)
+model OutputSnapshot {
+  id             Int      @id @default(autoincrement())
+  metric         String
+  currentValue   Decimal? @db.Decimal(38, 18)
+  target         Decimal? @db.Decimal(38, 18)
+  benchmark      Decimal? @db.Decimal(38, 18)
+  vsTarget       Decimal? @db.Decimal(38, 18)
+  vsBenchmark    Decimal? @db.Decimal(38, 18)
+  status         String?
+  trend          String?
+
+  createdAt      DateTime @default(now())
+  @@index([metric, createdAt])
+}
+
 model InputSnapshot {
   id                  Int               @id @default(autoincrement())
   maturitySnapshotId  Int
