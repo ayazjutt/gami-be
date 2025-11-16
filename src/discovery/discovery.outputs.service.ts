@@ -200,15 +200,79 @@ export class DiscoveryOutputsService {
     });
   }
 
-  private async computeAndSaveMaximumDrawdown(maturities: any[]) {
+    private async computeAndSaveMaximumDrawdown(maturities: any[]) {
     const { target, benchmark } = await this.getTargetBenchmark('Maximum Drawdown');
-    const currentValue = 0;
-    const vsTarget = target != null ? currentValue - target : null;
-    const vsBenchmark = benchmark != null ? currentValue - benchmark : null;
-    const status = vsTarget != null && vsTarget > 0 ? '✅' : '❌';
-    const trend = '↗️';
 
-    await this.upsertOutput('sharpe_ratio', {
+    // Efficient NAV history from DB (minimal columns)
+    const rows = await (this.prisma as any).maturitySnapshot.findMany({
+      select: { createdAt: true, payload: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const toNum = (v: any): number | null => {
+      if (v == null) return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+
+    const navByTs = new Map<number, number>();
+    for (const r of rows) {
+      const ts = new Date(r.createdAt as any).getTime();
+      const payload: any = (r as any)?.payload ?? null;
+      const assets: any[] = Array.isArray(payload) ? payload : (payload ? [payload] : []);
+
+      let nav = 0;
+      for (const asset of assets) {
+        const pools = Array.isArray(asset?.pools) ? asset.pools : [];
+
+        // PT
+        const ptPriceUsd = toNum(pools?.[0]?.ptPrice?.usd);
+        const ptBalRaw = toNum(asset?.balance);
+        const ptDecimals = toNum(asset?.decimals) ?? 0;
+        const ptBal = ptBalRaw != null ? (ptDecimals > 0 ? ptBalRaw / Math.pow(10, ptDecimals) : ptBalRaw) : 0;
+        if (ptPriceUsd != null && ptBal != null) nav += ptBal * ptPriceUsd;
+
+        // YT
+        const ytBalRaw = toNum(asset?.yt?.balance);
+        const ytDecimals = toNum(asset?.yt?.decimals) ?? 0;
+        const ytBal = ytBalRaw != null ? (ytDecimals > 0 ? ytBalRaw / Math.pow(10, ytDecimals) : ytBalRaw) : 0;
+        const ytPriceUsd = toNum(pools?.[0]?.ytPrice?.usd);
+        if (ytPriceUsd != null && ytBal != null) nav += ytBal * ytPriceUsd;
+
+        // LP
+        const lpSupplyOwned = toNum(asset?.lp?.supplyOwned ?? asset?.lpt?.supplyOwned ?? asset?.pools?.[0]?.lpt?.supplyOwned);
+        const lpPriceUsd = toNum(asset?.lp?.price?.usd ?? asset?.lpt?.price?.usd ?? asset?.pools?.[0]?.lpt?.price?.usd);
+        if (lpSupplyOwned != null && lpPriceUsd != null) nav += lpSupplyOwned * lpPriceUsd;
+      }
+
+      // If payload already contains the full portfolio array, keep only first entry per timestamp
+      if (Array.isArray(payload) && payload.length > 1) {
+        if (!navByTs.has(ts)) navByTs.set(ts, nav);
+      } else {
+        navByTs.set(ts, (navByTs.get(ts) ?? 0) + nav);
+      }
+    }
+
+    const navHistory = Array.from(navByTs.entries())
+      .map(([ts, nav]) => ({ ts, nav }))
+      .sort((a, b) => a.ts - b.ts);
+
+    let peak = -Infinity;
+    let mdd = 0;
+    for (const p of navHistory) {
+      if (p.nav > peak) peak = p.nav;
+      const dd = peak > 0 ? (p.nav - peak) / peak : 0;
+      if (dd < mdd) mdd = dd;
+    }
+
+    const currentValue = navHistory.length > 0 ? Math.abs(mdd) * 100 : null;
+    const vsTarget = target != null && currentValue != null ? currentValue - target : null;
+    const vsBenchmark = benchmark != null && currentValue != null ? currentValue - benchmark : null;
+     const status = vsTarget != null && vsTarget > 0 ? '✅' : '❌';
+    const trend = '↗️';
+    console.log("maximum_drawdown", currentValue)
+
+    await this.upsertOutput('maximum_drawdown', {
       currentValue,
       target,
       benchmark,
@@ -218,7 +282,6 @@ export class DiscoveryOutputsService {
       trend,
     });
   }
-
   private async computeAndSaveYieldEfficiency(maturities: any[]) {
     const { target, benchmark } = await this.getTargetBenchmark('Yield Efficiency');
     const currentValue = 0;
@@ -295,4 +358,7 @@ export class DiscoveryOutputsService {
     });
   }
 }
+
+
+
 
