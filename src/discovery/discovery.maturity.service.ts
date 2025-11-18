@@ -7,6 +7,7 @@ import { DiscoveryPtTrackingService } from './discovery.pt-tracking.service';
 import { DiscoveryYtTrackingService } from './discovery.yt-tracking.service';
 import { DiscoveryLpPoolsService } from './discovery.lp-pools.service';
 import { DiscoveryOutputsService } from './discovery.outputs.service';
+import { DiscoveryAlertsService } from './discovery.alerts.service';
 
 type MetricDef = { key: string; title: string };
 type AssetFound = {
@@ -56,6 +57,8 @@ export class DiscoveryMaturityService {
     private readonly lpPools: DiscoveryLpPoolsService,
     @Inject(forwardRef(() => DiscoveryOutputsService))
     private readonly outputs: DiscoveryOutputsService,
+    @Inject(forwardRef(() => DiscoveryAlertsService))
+    private readonly alerts: DiscoveryAlertsService,
   ) {}
 
   async runOnce(): Promise<void> {
@@ -78,7 +81,8 @@ export class DiscoveryMaturityService {
     await this.lpPools.calc();
     // process Output snapshot metrics
     await this.outputs.calc();
-
+    // process Alerts snapshot metrics
+    await this.alerts.calc();
     const maturities = await this.getLatestMaturities();
     // console.log(maturities[0].maturity);
   }

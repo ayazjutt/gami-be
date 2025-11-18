@@ -228,3 +228,61 @@ model Setting {
   numValue Decimal? @db.Decimal(38, 18)
   notes    String?
 }
+
+// Priority level for alerts
+enum AlertPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// Required action determined by alert
+enum AlertActionRequired {
+  EXECUTE_ARBITRAGE @map("Execute Arbitrage")
+  MONITOR           @map("Monitor")
+  EXECUTE_HARVEST   @map("Execute Harvest")
+  WAIT              @map("Wait")
+  REDUCE_POSITIONS  @map("Reduce Positions")
+  CONTINUE          @map("Continue")
+  DELAY_TRANSACTIONS @map("Delay Transactions")
+  PLAN_ROLLOVER     @map("Plan Rollover")
+}
+
+// Automated action type
+enum AlertAutoAction {
+  SIGNAL_BOT     @map("Signal Bot")
+  AUTO_HARVEST   @map("Auto Harvest")
+  PAUSE_TRADING  @map("Pause Trading")
+  QUEUE_TXS      @map("Queue Txs")
+  ROLLOVER_ALERT @map("Rollover Alert")
+}
+
+// Manual review item
+enum AlertManualReview {
+  REVIEW_SIZE     @map("Review Size")
+  CHECK_GAS       @map("Check Gas")
+  EMERGENCY_PLAN  @map("Emergency Plan")
+  COST_ANALYSIS   @map("Cost Analysis")
+  STRATEGY_REVIEW @map("Strategy Review")
+}
+
+// Alerts snapshot table
+model AlertsSnapshot {
+  id             Int                @id @default(autoincrement())
+  metric         String
+  conditionMet   Boolean
+  currentValue   Decimal?           @db.Decimal(38, 18)
+  threshold      Decimal?           @db.Decimal(38, 18)
+  priority       AlertPriority?
+  actionRequired AlertActionRequired?
+  autoAction     AlertAutoAction?
+  manualReview   AlertManualReview?
+  maturitySnapshotId Int?
+  maturitySnapshot   MaturitySnapshot? @relation(fields: [maturitySnapshotId], references: [id], onDelete: Cascade)
+  createdAt      DateTime           @default(now())
+
+  @@index([createdAt])
+  @@index([metric, createdAt])
+  @@index([maturitySnapshotId])
+}
