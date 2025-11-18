@@ -1,4 +1,6 @@
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { HttpService } from '@nestjs/axios';
+import { lastValueFrom } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { DiscoveryMaturityService } from './discovery.maturity.service';
 
@@ -7,6 +9,8 @@ type OutputMetric = { slug: string; title: string };
 @Injectable()
 export class DiscoveryOutputsService {
   private readonly logger = new Logger(DiscoveryOutputsService.name);
+  private readonly SPECTRA_SUBGRAPH_URL =
+    'https://subgraph.satsuma-prod.com/93c7f5423489/perspective/spectra-base/api';
 
   // Mapping of output snapshot metrics
   readonly outputSnapshotMetrics: OutputMetric[] = [
@@ -24,11 +28,14 @@ export class DiscoveryOutputsService {
     @Inject(forwardRef(() => DiscoveryMaturityService))
     private readonly maturity: DiscoveryMaturityService,
     private readonly prisma: PrismaService,
+    private readonly httpService: HttpService,
   ) {}
 
   async calc() {
     const maturities = await this.maturity.getLatestMaturities();
     this.logger.log(`Outputs: fetched ${maturities.length} maturities`);
+    const freq = await this.getAverageHarvestIntervalDays(maturities[0].maturity.payload)
+    console.log('freq', freq)
 
     await this.computeAndSaveMetaVaultNetApy(maturities);
     await this.computeAndSaveAlphaGeneration(maturities);
@@ -284,9 +291,46 @@ export class DiscoveryOutputsService {
   }
   private async computeAndSaveYieldEfficiency(maturities: any[]) {
     const { target, benchmark } = await this.getTargetBenchmark('Yield Efficiency');
-    const currentValue = 0;
-    const vsTarget = target != null ? currentValue - target : null;
-    const vsBenchmark = benchmark != null ? currentValue - benchmark : null;
+    // Calculate Yield Efficiency = (Realized Yield / Target Yield) � 100% using provided maturities
+    const toNum = (v: any): number | null => {
+      if (v == null) return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+
+    // Build set of maturities to include (unix seconds)
+    const includeMaturities = new Set<number>();
+    for (const mm of maturities) {
+      const mt: Date | null = (mm?.maturity?.maturityTs ?? null) as Date | null;
+      if (mt) includeMaturities.add(Math.floor(new Date(mt).getTime() / 1000));
+    }
+
+    // Fetch global Target Yield from settings (percent)
+    const ty = await this.prisma.setting.findUnique({ where: { key: 'Target Yield' } as any });
+    const globalTargetYield = toNum((ty as any)?.numValue ?? (ty as any)?.value);
+
+    const efficiencies: number[] = [];
+    for (const mm of maturities) {
+      const p: any = (mm?.maturity?.payload ?? null) as any;
+      const assets: any[] = Array.isArray(p) ? p : (p ? [p] : []);
+      for (const asset of assets) {
+        const maturityUnix = toNum(asset?.maturity);
+        if (maturityUnix == null || !includeMaturities.has(Math.floor(maturityUnix))) continue;
+        const realizedApy = toNum(asset?.pools?.[0]?.impliedApy);
+        const targetApy = globalTargetYield ?? target ?? null;
+        if (realizedApy != null && targetApy != null && targetApy !== 0) {
+          const eff = (realizedApy / targetApy) * 100;
+          if (Number.isFinite(eff)) efficiencies.push(eff);
+        }
+      }
+    }
+
+    const currentValue = efficiencies.length > 0
+      ? efficiencies.reduce((a, b) => a + b, 0) / efficiencies.length
+      : null;
+
+    const vsTarget = target != null && currentValue != null ? currentValue - target : null;
+    const vsBenchmark = benchmark != null && currentValue != null ? currentValue - benchmark : null;
     const status = vsTarget != null && vsTarget > 0 ? '✅' : '❌';
     const trend = '↗️';
 
@@ -357,7 +401,67 @@ export class DiscoveryOutputsService {
       trend,
     });
   }
+
+  async getAverageHarvestIntervalDays(pool: any): Promise<number> {
+  // derive pool address and params
+  const poolAddress = pool.pools[0].address.toLowerCase();
+  
+
+  // choose a span (3600 = hourly, 86400 = daily)
+  const span = 3600;
+
+  const query = `
+    query HarvestRateChanges($pool: String!, $span: Int!) {
+      poolStats_collection(
+        where: { pool: $pool, span: $span }
+        orderBy: timestamp
+        orderDirection: asc
+      ) {
+        timestamp
+        ptRate
+      }
+    }
+  `;
+
+  const variables = { pool: poolAddress, span };
+
+  // call the Spectra subgraph
+  const resp = await lastValueFrom(
+    this.httpService.post(this.SPECTRA_SUBGRAPH_URL, { query, variables }),
+  );
+
+  const stats = resp.data?.data?.poolStats_collection ?? [];
+
+  // record timestamps when ptRate changes (indicating a harvest)
+  let lastRate = "";
+  const harvestTimestamps: number[] = [];
+  for (const row of stats) {
+    const currentRate = row.ptRate;
+    if (lastRate && currentRate !== lastRate) {
+      harvestTimestamps.push(Number(row.timestamp));
+    }
+    lastRate = currentRate;
+  }
+
+  // need at least two harvests to compute an interval
+  if (harvestTimestamps.length < 2) {
+    return 0;
+  }
+
+  // compute differences between consecutive harvests
+  const daySeconds = 86400;
+  let totalDiffDays = 0;
+  for (let i = 1; i < harvestTimestamps.length; i++) {
+    const diffSeconds = harvestTimestamps[i] - harvestTimestamps[i - 1];
+    totalDiffDays += diffSeconds / daySeconds;
+  }
+
+  // return the average days between harvests
+  return totalDiffDays / (harvestTimestamps.length - 1);
 }
+
+}
+
 
 
 

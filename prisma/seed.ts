@@ -125,6 +125,9 @@ for (const s of settings) {
     { key: 'Gas Efficiency Benchmark',       value: null, numValue: '0.02', notes: null },
     { key: 'Slippage Control Benchmark',     value: null, numValue: '0.02', notes: null },
 
+    // Global Target Yield for Yield Efficiency calculations (percent)
+    { key: 'Target Yield',                   value: null, numValue: '8',    notes: 'Global Target Yield (%) for Yield Efficiency' },
+
     // Dot-keys used by OutputSettings (kept in sync with above values)
     { key: 'metavault.apy.target',           value: null, numValue: '0.24', notes: 'Synced from MetaVault Net APY Target' },
     { key: 'metavault.apy.benchmark',        value: null, numValue: '0.2',  notes: 'Synced from MetaVault Net APY Benchmark' },
